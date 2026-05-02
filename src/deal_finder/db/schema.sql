@@ -51,13 +51,17 @@ CREATE TABLE IF NOT EXISTS listings (
     rejected                            BOOLEAN NOT NULL DEFAULT FALSE,
     rejection_reason                    TEXT,
 
-    -- Appraisal outputs (filled by LLM worker once eBay/comps + Ollama land)
+    -- Appraisal outputs (filled by the worker)
     appraised                           BOOLEAN NOT NULL DEFAULT FALSE,
     deal_score                          INTEGER,
     fair_value                          REAL,
     appraisal_note                      TEXT,
     appraisal_model                     TEXT,
     appraised_at                        TIMESTAMPTZ,
+    -- Full reproducible breakdown of how the score was derived. JSONB so
+    -- it can hold formula version, comps_used, ratio, confidence etc.
+    -- See appraisal/formula.py::ScoreBreakdown.
+    appraisal_breakdown                 JSONB,
 
     -- Comp lookup outputs (cached on listing for fast read)
     comp_search_term                    TEXT,

@@ -27,6 +27,7 @@ from ..db.listings import update_appraisal, update_comps_resolution
 from ..db.comps import CompStats
 from ..scraper.facebook_detail import get_default_client as get_detail_client
 from ..scraper.price_extraction import resolve_price
+from .formula import compute_score, llm_needed
 from .normalizer import (
     DEFAULT_MODEL as NORMALIZER_MODEL,
     extract_price_llm,
@@ -34,7 +35,7 @@ from .normalizer import (
 )
 from .ollama_client import get_default_client
 from .scorer import DEFAULT_MODEL as SCORER_MODEL
-from .scorer import score_listing
+from .scorer import estimate_fair_value
 
 logger = logging.getLogger(__name__)
 
@@ -220,23 +221,46 @@ def _process_one(
         exclude_listing_id=listing_id,
     )
 
-    # 3. Score with the LLM.
-    appraisal = score_listing(
-        title=title,
-        asking_price=asking,
-        description=description or None,
-        location=row.get("seller_location"),
-        comp=comp,
-        raw_price=raw_price,
-        price_extracted=price_extracted,
-    )
-    if appraisal is None:
+    # 3. Get LLM fair_value estimate ONLY when comps are too sparse.
+    #    With enough comps, the trimmed median (× asking discount) is
+    #    the fair value, no LLM needed.
+    llm_estimate = None
+    note = ""
+    model_used = "formula-only"
+    if llm_needed(comp):
+        llm_estimate = estimate_fair_value(
+            title=title,
+            asking_price=asking,
+            description=description or None,
+            location=row.get("seller_location"),
+            comp=comp,
+            raw_price=raw_price,
+            price_extracted=price_extracted,
+        )
+        if llm_estimate is not None:
+            note = llm_estimate.note
+            model_used = llm_estimate.model
+
+    # 4. Compute score deterministically from comps + (optional) LLM.
+    try:
+        breakdown = compute_score(
+            asking_price=asking,
+            comp=comp,
+            fair_value_from_llm=(
+                llm_estimate.fair_value if llm_estimate else None
+            ),
+        )
+    except ValueError as e:
+        logger.warning("formula failed for %s: %s", listing_id, e)
         return False
 
-    # 4. Persist comp resolution + appraisal in one transaction.
-    note = appraisal.note
-    if appraisal.confidence:
-        note = f"[{appraisal.confidence}] {note}".strip()
+    # 5. Persist breakdown + comp resolution + appraisal in one txn.
+    annotated_note = note
+    if breakdown.confidence_label:
+        annotated_note = (
+            f"[{breakdown.confidence_label} ±{breakdown.confidence_pm}] "
+            f"{note}".strip()
+        )
 
     with get_conn() as conn:
         with conn:
@@ -252,18 +276,21 @@ def _process_one(
             )
             update_appraisal(
                 conn, listing_id,
-                deal_score=appraisal.deal_score,
-                fair_value=appraisal.fair_value,
-                appraisal_note=note,
-                appraisal_model=appraisal.model,
+                deal_score=breakdown.deal_score,
+                fair_value=breakdown.fair_value,
+                appraisal_note=annotated_note,
+                appraisal_model=model_used,
+                breakdown=breakdown,
             )
 
     logger.info(
-        "%s | score=%d conf=%s comps=%d median=%s elapsed=%.1fs | %s",
-        listing_id, appraisal.deal_score, appraisal.confidence,
-        comp.sample_size,
-        f"${comp.median:.0f}" if comp.median else "n/a",
-        appraisal.elapsed_s, title[:60],
+        "%s | score=%d conf=%s±%d ratio=%.2f n=%d trimmed=%d "
+        "fair=$%.0f source=%s | %s",
+        listing_id, breakdown.deal_score,
+        breakdown.confidence_label, breakdown.confidence_pm,
+        breakdown.ratio, comp.sample_size, breakdown.outliers_dropped,
+        breakdown.fair_value, breakdown.fair_value_source,
+        title[:60],
     )
     return True
 

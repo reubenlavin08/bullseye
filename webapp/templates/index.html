@@ -132,17 +132,29 @@
                                 {% endif %}
 
                                 {% if r.deal_score is not none %}
+                                    {% set bd = r.appraisal_breakdown %}
                                     <div class="appraisal-display
                                                 {% if r.deal_score >= 70 %}score-high
                                                 {% elif r.deal_score >= 50 %}score-mid
                                                 {% else %}score-low{% endif %}">
                                         <div class="score-row">
                                             <span class="score-num">{{ r.deal_score }}</span>
+                                            {% if bd and bd.confidence_pm %}
+                                                <span class="score-pm">±{{ bd.confidence_pm }}</span>
+                                            {% endif %}
                                             <span class="score-label">deal score</span>
                                             {% if r.fair_value %}
                                                 <span class="score-fair">fair: ${{ '%.0f'|format(r.fair_value) }}</span>
                                             {% endif %}
                                         </div>
+                                        {% if bd %}
+                                            <div class="score-math">
+                                                <span class="math-eq">
+                                                    ${{ '%.0f'|format(bd.asking_price) }} ÷ ${{ '%.0f'|format(bd.fair_value) }} = ratio <strong>{{ '%.2f'|format(bd.ratio) }}</strong>
+                                                </span>
+                                                <span class="math-source muted">{{ bd.fair_value_source }}</span>
+                                            </div>
+                                        {% endif %}
                                         {% if r.appraisal_note %}
                                             <div class="score-note">{{ r.appraisal_note }}</div>
                                         {% endif %}
@@ -152,7 +164,7 @@
                                                     data-comp-term="{{ r.comp_search_term or '' }}"
                                                     data-comp-source="{{ r.comp_source or 'marketplace' }}"
                                                     title="See the listings this median is based on">
-                                                {{ r.comp_sample_size }} comp(s){% if r.comp_median %} · median ${{ '%.0f'|format(r.comp_median) }}{% endif %} ▾
+                                                {{ r.comp_sample_size }} comp(s){% if bd and bd.outliers_dropped %}, {{ bd.outliers_dropped }} outlier(s) dropped{% endif %}{% if r.comp_median %} · raw median ${{ '%.0f'|format(r.comp_median) }}{% endif %} ▾
                                             </button>
                                             <div class="comps-pane" hidden>
                                                 <div class="comps-spinner" hidden>loading…</div>

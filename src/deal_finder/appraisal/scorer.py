@@ -1,21 +1,19 @@
-"""Listing → deal score.
+"""LLM fair-value estimator + human-readable note.
 
-Sends one listing + its comp stats to Qwen-2.5:7B and parses the JSON
-back. Three behavioral rules baked into the prompt:
+After the Phase 7.4 stats pivot, the LLM no longer picks the deal
+score directly — that's mechanical now (`appraisal/formula.py`).
+The LLM has two jobs left:
 
-  1. Comps are ASKING prices from Facebook Marketplace, not sold prices.
-     Marketplace asks tend to run 15-30% above what items actually sell
-     for. The model is told this explicitly so it doesn't mistake the
-     median for true market value.
+  1. Fair-value estimation, ONLY when comp data is sparse
+     (sample_size < LLM_FALLBACK_THRESHOLD). When we have enough
+     comps, the trimmed median (× asking-vs-sold discount) is a
+     better estimator than any 7B model's intuition.
 
-  2. When sample_size is small (< 3) or zero, the model is told to lean
-     on prior knowledge and emit confidence="low".
+  2. Optional human-readable note explaining the score, used by the
+     UI. The note never feeds back into the score itself.
 
-  3. Output is a strict JSON object: deal_score (0-100), fair_value
-     (float), confidence ("high"|"medium"|"low"), note (one sentence).
-
-The system prompt does not change between calls — keeps the prompt
-prefix identical so any KV-cache benefit Ollama provides accrues.
+Output: {"fair_value": float|null, "note": str}. No deal_score, no
+confidence — those come from the formula.
 """
 from __future__ import annotations
 
@@ -35,59 +33,48 @@ DEFAULT_MODEL = os.environ.get(
 
 
 @dataclass
-class Appraisal:
-    """Output of one scoring call."""
-    deal_score: int          # 0-100
+class LlmEstimate:
+    """Raw output of one LLM fair-value call. Pure model output —
+    the worker turns this into a final score via the formula module."""
     fair_value: float | None
-    confidence: str          # "high" | "medium" | "low"
     note: str
     model: str
     elapsed_s: float
-    raw: dict | None = None  # original LLM JSON for audit
+    raw: dict | None = None
 
 
-SYSTEM_PROMPT = """You are a secondhand-marketplace deal evaluator.
+SYSTEM_PROMPT = """You estimate the fair secondhand market value of one Facebook Marketplace listing.
 
-You receive one local Facebook Marketplace listing and aggregate stats
-of similar items currently listed nearby. You return a JSON object
-with a 0-100 deal score and a fair-value estimate.
+You receive a listing and (optionally) statistics from comparable items.
+Comp stats, when present, are ASKING prices from Marketplace and run
+15-30% above true sold prices.
 
-CRITICAL CONTEXT:
-- The comp stats are ASKING prices from Marketplace, NOT sold prices.
-- Asking prices typically run 15-30% above actual sale prices.
-- When you estimate fair_value, anchor on the comp median but discount
-  it ~20% to approximate true market value (unless your training tells
-  you the item commands premium prices).
+YOUR JOB: estimate fair_value — what the item would actually SELL for
+in a private secondhand transaction.
 
-SAMPLE SIZE GUIDANCE:
-- sample_size >= 5: anchor strongly on the comp median (with the 20%
-  asking-price discount). Confidence: "high".
-- sample_size 3-4: blend the median with your training knowledge.
-  Confidence: "medium".
-- sample_size 1-2: use comps as one weak signal; weight your training
-  knowledge heavily. Confidence: "low".
-- sample_size 0: estimate fair_value purely from your training
-  knowledge. Be conservative — pick the LOWER end of what you think
-  the item is worth secondhand. Confidence: "low".
+GUIDANCE:
+- If sample_size is given and >= 3, anchor on the median asking price
+  but discount it ~20% to approximate true sold value.
+- If sample_size is small (1-2), use comps as one weak signal and
+  weight your training knowledge heavily.
+- If sample_size is 0, estimate purely from your training knowledge.
+  Be conservative — pick the LOWER end of plausible secondhand value.
+- If the listing notes damage / missing parts / "needs fix", reduce
+  fair_value accordingly.
+- If it includes accessories, increase fair_value modestly.
 
-SCORING:
-- 90-100: exceptional deal, asking ≤ 50% of fair value
-- 70-89:  good deal, asking 50-75% of fair value
-- 50-69:  fair price, asking 75-100% of fair value
-- 30-49:  slightly overpriced, asking 100-130% of fair value
-- 0-29:   significantly overpriced, asking > 130% of fair value
+You do NOT compute a deal score. The score is calculated separately
+by a deterministic formula from your fair_value estimate.
 
-OUTPUT — return ONLY this JSON object, no other text:
+OUTPUT — return ONLY this JSON object, nothing else:
 {
-  "deal_score": <int 0-100>,
   "fair_value": <float, your estimated true secondhand market value>,
-  "confidence": "high" | "medium" | "low",
-  "note": "<one sentence explaining the score>"
+  "note": "<one short sentence on the listing's strengths/weaknesses>"
 }
 """
 
 
-def score_listing(
+def estimate_fair_value(
     *,
     title: str,
     asking_price: float,
@@ -98,10 +85,13 @@ def score_listing(
     price_extracted: bool = False,
     client: OllamaClient | None = None,
     model: str = DEFAULT_MODEL,
-) -> Appraisal | None:
-    """Score one listing. Returns None if the LLM call fails terminally
-    or the output is unparseable — caller should leave the listing
-    unappraised and retry next cycle."""
+) -> LlmEstimate | None:
+    """Ask the LLM for a fair-value estimate + a one-sentence note.
+
+    Returns None if the LLM call fails or the output is unparseable —
+    caller should fall back to the formula's raw-median path or skip
+    this listing.
+    """
     cli = client or get_default_client()
     user = _build_user_prompt(
         title=title,
@@ -119,41 +109,30 @@ def score_listing(
             system=SYSTEM_PROMPT,
             user=user,
             temperature=0.2,
-            num_predict=200,
+            num_predict=160,
         )
     except Exception as e:  # noqa: BLE001
-        logger.warning("scorer LLM call failed for %r: %s", title, e)
+        logger.warning("fair-value LLM call failed for %r: %s", title, e)
         return None
 
     parsed = resp.parsed
     if not isinstance(parsed, dict):
         logger.warning(
-            "scorer returned bad shape for %r: %s", title, resp.raw_text[:200],
+            "fair-value returned bad shape for %r: %s",
+            title, resp.raw_text[:200],
         )
         return None
 
-    score = parsed.get("deal_score")
-    if not isinstance(score, (int, float)):
-        logger.warning("scorer returned non-numeric deal_score: %s", parsed)
-        return None
-
-    deal_score = max(0, min(100, int(score)))
     fair_value = parsed.get("fair_value")
-    if isinstance(fair_value, (int, float)):
+    if isinstance(fair_value, (int, float)) and fair_value > 0:
         fair_value = float(fair_value)
     else:
         fair_value = None
 
-    confidence = parsed.get("confidence", "low")
-    if confidence not in ("high", "medium", "low"):
-        confidence = "low"
-
     note = str(parsed.get("note", "")).strip()[:500]
 
-    return Appraisal(
-        deal_score=deal_score,
+    return LlmEstimate(
         fair_value=fair_value,
-        confidence=confidence,
         note=note,
         model=resp.model,
         elapsed_s=resp.elapsed_s,

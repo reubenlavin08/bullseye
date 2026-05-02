@@ -86,13 +86,15 @@ def _enrich_listing(sl) -> dict:
     base["comp_sample_size"] = None
     base["comp_search_term"] = None
     base["comp_source"] = None
+    base["appraisal_breakdown"] = None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT deal_score, fair_value, appraisal_note,
                               comp_median, comp_sample_size,
-                              comp_search_term, comp_source
+                              comp_search_term, comp_source,
+                              appraisal_breakdown
                        FROM listings WHERE id = %s AND appraised = TRUE""",
                     (sl.id,),
                 )
@@ -105,6 +107,7 @@ def _enrich_listing(sl) -> dict:
                     base["comp_sample_size"] = row[4]
                     base["comp_search_term"] = row[5]
                     base["comp_source"] = row[6]
+                    base["appraisal_breakdown"] = row[7]  # already a dict from JSONB
     except Exception:  # noqa: BLE001
         # DB might be down; the rest of the UI should still render.
         pass

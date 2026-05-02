@@ -183,7 +183,21 @@ def update_appraisal(
     fair_value: float | None,
     appraisal_note: str | None,
     appraisal_model: str | None,
+    breakdown=None,
 ) -> None:
+    """Persist an appraisal result. `breakdown` is an optional
+    `appraisal.formula.ScoreBreakdown` whose dataclass fields go into
+    the `appraisal_breakdown` JSONB column for full reproducibility."""
+    import json
+    from dataclasses import asdict, is_dataclass
+
+    breakdown_json = None
+    if breakdown is not None:
+        if is_dataclass(breakdown):
+            breakdown_json = json.dumps(asdict(breakdown))
+        elif isinstance(breakdown, dict):
+            breakdown_json = json.dumps(breakdown)
+
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE listings SET
@@ -191,10 +205,12 @@ def update_appraisal(
                   fair_value = %s,
                   appraisal_note = %s,
                   appraisal_model = %s,
+                  appraisal_breakdown = %s::jsonb,
                   appraised = TRUE,
                   appraised_at = NOW()
                WHERE id = %s""",
-            (deal_score, fair_value, appraisal_note, appraisal_model, listing_id),
+            (deal_score, fair_value, appraisal_note, appraisal_model,
+             breakdown_json, listing_id),
         )
 
 
