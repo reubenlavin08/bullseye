@@ -201,3 +201,17 @@ CREATE TABLE IF NOT EXISTS scheduler_events (
 CREATE INDEX IF NOT EXISTS idx_events_created_at  ON scheduler_events (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_type_time   ON scheduler_events (event_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_search_time ON scheduler_events (search_id, created_at DESC);
+
+-- ---------------------------------------------------------------------
+-- city_geocache — city display name -> lat/lng cache.
+-- Populated lazily by geocode_city() (Nominatim/OpenStreetMap) the
+-- first time the scheduler encounters a new city. Used by the
+-- client-side distance filter in poll_search since FB returns only
+-- city names (not coords) and ignores small filter_radius_km values.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS city_geocache (
+    label       TEXT PRIMARY KEY,    -- normalized seller_location string
+    latitude    REAL,                -- NULL when geocoding failed
+    longitude   REAL,
+    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

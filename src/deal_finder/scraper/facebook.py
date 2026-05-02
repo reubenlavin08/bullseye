@@ -125,9 +125,21 @@ class _RateGate:
             self._last = time.monotonic()
 
 
-# Default: at most 1 search per 2 seconds. Override per-instance via
+# Default: at most 1 search per 8 seconds. Override per-instance via
 # `FacebookSearchClient(rate_interval_s=...)`.
-_DEFAULT_SEARCH_INTERVAL_S = 2.0
+#
+# History: 2.0s and 5.0s both produced 100%+ rate-limit hits with 49
+# active watches polling every 60s. FB's actual tolerance for a single
+# unauthenticated IP is more like 7-8/min once we factor in any
+# heuristic anti-bot scoring. 8.0s gives us a 7.5/min ceiling.
+#
+# Tradeoff: with N watches and 60s poll interval, each watch effectively
+# polls every max(60s, 8s * N). At N=49 that's ~6.5 minutes between
+# polls. Painful but the system actually works at this rate; at higher
+# rates it's blocked >50% of the time and produces fewer effective polls.
+# Pause watches you don't actively need on the dashboard's Manage tab
+# to lower N and get faster polling on the ones that matter.
+_DEFAULT_SEARCH_INTERVAL_S = 8.0
 
 
 # --- Client ---------------------------------------------------------------
