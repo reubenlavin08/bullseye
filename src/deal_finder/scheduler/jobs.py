@@ -755,6 +755,113 @@ def attribute_listing(
     return matches[0][2]
 
 
+# --- Slow-start ramp -----------------------------------------------------
+#
+# Start cautious (1 poll/min) and progressively shorten the effective
+# interval while FB stays quiet. Reset to the initial interval the
+# moment we see a rate-limit. Off by default; opt-in via env so
+# operators who already know their floor can run at COORDINATOR_TICK_S
+# directly.
+#
+#   SLOW_START_MODE=1 to enable
+#   SLOW_START_INITIAL_S       starting effective interval (default 60s)
+#   SLOW_START_FLOOR_S         fastest we'll go (default 20s)
+#   SLOW_START_HEALTHY_PERIOD_S window to be "clean" before ramping (default 300s)
+#   SLOW_START_STEP_S          interval reduction per ramp step (default 5s)
+#
+# The coordinator still ticks every COORDINATOR_TICK_S, but most ticks
+# are skipped while the effective interval > tick. As ramp-down
+# happens, more ticks turn into actual polls.
+SLOW_START_MODE = os.environ.get("SLOW_START_MODE", "0") == "1"
+SLOW_START_INITIAL_S = int(os.environ.get("SLOW_START_INITIAL_S", "60"))
+SLOW_START_FLOOR_S = int(os.environ.get("SLOW_START_FLOOR_S", "20"))
+SLOW_START_HEALTHY_PERIOD_S = int(os.environ.get("SLOW_START_HEALTHY_PERIOD_S", "300"))
+SLOW_START_STEP_S = int(os.environ.get("SLOW_START_STEP_S", "5"))
+
+# Module-level state. Survives across ticks; reset on process restart
+# (a fresh boot starts at SLOW_START_INITIAL_S — sensible default).
+_slow_start_state = {
+    "min_interval_s": SLOW_START_INITIAL_S,
+    "last_poll_attempt_t": 0.0,
+    "last_ramp_check_t": 0.0,
+}
+
+
+def _no_rate_limits_in_last_period(period_s: int) -> bool:
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""SELECT COUNT(*) FROM scheduler_events
+                        WHERE event_type='fb_rate_limit'
+                          AND created_at >= NOW() - INTERVAL '{period_s} seconds'""",
+                )
+                return cur.fetchone()[0] == 0
+    except Exception:  # noqa: BLE001
+        return True  # fail open — assume healthy
+
+
+def _slow_start_should_skip() -> bool:
+    """When SLOW_START_MODE is on, skip ticks that arrive sooner than
+    the current effective minimum interval.
+
+    Side-effects: when we DO let a tick through, this also runs the
+    ramp-down check (every SLOW_START_HEALTHY_PERIOD_S) and may shorten
+    the effective interval, or reset it to initial if a rate-limit
+    was seen during the window.
+    """
+    if not SLOW_START_MODE:
+        return False
+    now = time.monotonic()
+    state = _slow_start_state
+
+    # First-call init: don't immediately ramp down because last_ramp_check_t
+    # was 0 (which would make any boot skip the full initial period). We
+    # set both timers to now so the first poll goes through unimpeded
+    # AND the first ramp is delayed by a full HEALTHY_PERIOD.
+    if state["last_ramp_check_t"] == 0.0:
+        state["last_ramp_check_t"] = now
+        state["last_poll_attempt_t"] = now
+        return False
+
+    elapsed = now - state["last_poll_attempt_t"]
+    if elapsed < state["min_interval_s"]:
+        return True
+
+    # We're letting this tick through. Ramp check first.
+    if now - state["last_ramp_check_t"] >= SLOW_START_HEALTHY_PERIOD_S:
+        state["last_ramp_check_t"] = now
+        if _no_rate_limits_in_last_period(SLOW_START_HEALTHY_PERIOD_S):
+            old = state["min_interval_s"]
+            new = max(SLOW_START_FLOOR_S, old - SLOW_START_STEP_S)
+            if new != old:
+                state["min_interval_s"] = new
+                logger.info(
+                    "slow-start ramp: %ds clean → effective interval %ds → %ds",
+                    SLOW_START_HEALTHY_PERIOD_S, old, new,
+                )
+                record_event(
+                    "slow_start_ramp",
+                    direction="down", from_s=old, to_s=new,
+                )
+        else:
+            old = state["min_interval_s"]
+            state["min_interval_s"] = SLOW_START_INITIAL_S
+            if state["min_interval_s"] != old:
+                logger.warning(
+                    "slow-start reset: rate-limit in window → interval %ds → %ds",
+                    old, state["min_interval_s"],
+                )
+                record_event(
+                    "slow_start_ramp",
+                    direction="reset",
+                    from_s=old, to_s=state["min_interval_s"],
+                )
+
+    state["last_poll_attempt_t"] = now
+    return False
+
+
 # --- Adaptive rate-limit backoff -----------------------------------------
 #
 # Philosophy: the moment FB rate-limits us we should HARD pull back, not
@@ -801,6 +908,8 @@ def coordinator_tick() -> None:
     event — see _compute_cooldown_remaining_s.
     """
     if _should_skip_tick_for_backoff():
+        return
+    if _slow_start_should_skip():
         return
 
     if os.environ.get("BATCH_POLL_MODE", "off").lower() == "on":

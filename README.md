@@ -177,14 +177,18 @@ Working today:
 - ✅ Per-watch keyword must-include / must-exclude (backend; UI in progress)
 
 In progress:
-- 🔄 Rate-limit hardening: aggressive exponential cooldown is in;
-  next up is residential-proxy rotation + `curl_cffi` JA3 impersonation
-  (cheapest credible bypass for FB's per-IP bucket)
-- 🔄 Multi-keyword grouping (one FB poll covers many watches) — code
-  is wired but `BATCH_POLL_MODE` ships off until
-  `tests/test_batch_polling_live.py` confirms FB's combined-keyword
-  search returns per-term results
+- 🔄 Rate-limit hardening: aggressive exponential cooldown + slow-start
+  ramp are in. Next up if these aren't enough: residential-proxy
+  rotation + `curl_cffi` JA3 impersonation (cheapest credible bypass
+  for FB's per-IP bucket)
 - 🔄 UI controls for keyword must-include/must-exclude
+
+Killed (won't ship):
+- ❌ **Multi-keyword grouping** — empirically verified broken via
+  `tests/test_batch_polling_live.py`. FB's combined-keyword search
+  returns 0% recall vs. solo per-keyword polling — the result set is
+  effectively a different (smaller) population, not a union. Code
+  remains in tree behind `BATCH_POLL_MODE` for posterity.
 
 Roadmap (in priority order — gated on rate-limit reliability first):
 - 🛒 **eBay sold-comps integration** — developer account in hand;
