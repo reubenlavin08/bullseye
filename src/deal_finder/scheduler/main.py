@@ -22,10 +22,12 @@ on the next reload tick (every RELOAD_INTERVAL_S seconds).
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import signal
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -126,11 +128,52 @@ def _reload_tick(scheduler: BlockingScheduler) -> None:
         logger.exception("reload_searches failed: %s", e)
 
 
+def _setup_logging() -> Path | None:
+    """Install handlers for both stdout (live terminal feel) AND a
+    rotating file at logs/scheduler.log (so the dashboard can tail
+    historical lines after restarts).
+
+    Returns the log file path or None if the file handler couldn't be
+    installed (e.g. read-only filesystem).
+    """
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    fmt = "%(asctime)s %(levelname)-7s %(name)s | %(message)s"
+
+    # Reset root config: basicConfig is idempotent on re-imports but its
+    # 'first call wins' semantics fight us when the webapp imports this
+    # module before the scheduler starts. Clear handlers explicitly.
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(level)
+    formatter = logging.Formatter(fmt)
+
+    stdout_h = logging.StreamHandler(sys.stdout)
+    stdout_h.setFormatter(formatter)
+    root.addHandler(stdout_h)
+
+    log_path = Path(__file__).resolve().parents[3] / "logs" / "scheduler.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        # 10 MB rotation, keep 3 backups -> ~40 MB total max on disk.
+        file_h = logging.handlers.RotatingFileHandler(
+            log_path,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        file_h.setFormatter(formatter)
+        root.addHandler(file_h)
+        return log_path
+    except OSError as e:
+        logging.warning("could not open log file %s: %s (stdout only)", log_path, e)
+        return None
+
+
 def run_forever() -> int:
-    logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-    )
+    log_path = _setup_logging()
+    if log_path:
+        logger.info("scheduler logging to %s", log_path)
 
     if WARMUP_LLM_ON_BOOT:
         try:

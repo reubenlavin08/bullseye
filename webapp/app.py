@@ -268,6 +268,60 @@ def detail(listing_id: str):
     })
 
 
+_SCHEDULER_LOG_PATH = _REPO / "logs" / "scheduler.log"
+
+
+@app.route("/api/dashboard/log/tail")
+def api_dashboard_log_tail():
+    """Return the last N lines of logs/scheduler.log for the live tail.
+
+    Query param: n (default 200, max 1000). The scheduler writes to this
+    file via a RotatingFileHandler (10 MB cap, 3 backups). The dashboard
+    polls this every 2-3 seconds.
+
+    Reading the last N lines of a file efficiently means seeking from the
+    end, but for files in the low-MB range the simpler approach is to
+    just read the whole file and slice. We cap N at 1000 to bound the
+    response size and the read window.
+    """
+    try:
+        n = int(request.args.get("n", 200))
+    except (TypeError, ValueError):
+        n = 200
+    n = max(1, min(n, 1000))
+
+    if not _SCHEDULER_LOG_PATH.exists():
+        return jsonify({
+            "lines": [],
+            "path": str(_SCHEDULER_LOG_PATH),
+            "exists": False,
+            "warning": "scheduler hasn't started yet — no log file found",
+        })
+
+    try:
+        # Seek-from-end approach: read up to ~256 KB from the tail and
+        # split. Plenty for 1000 typical log lines (~120 chars each).
+        size = _SCHEDULER_LOG_PATH.stat().st_size
+        read_window = min(size, 256 * 1024)
+        with _SCHEDULER_LOG_PATH.open("rb") as f:
+            f.seek(size - read_window)
+            chunk = f.read().decode("utf-8", errors="replace")
+        # Drop a possibly-truncated first line if we didn't start at 0
+        lines = chunk.splitlines()
+        if size > read_window and lines:
+            lines = lines[1:]
+        lines = lines[-n:]
+    except OSError as e:
+        return jsonify({"lines": [], "error": str(e)}), 500
+
+    return jsonify({
+        "lines": lines,
+        "path": str(_SCHEDULER_LOG_PATH),
+        "exists": True,
+        "total_returned": len(lines),
+    })
+
+
 @app.route("/api/searches")
 def api_searches():
     """Return active saved searches — used to populate the subscribe

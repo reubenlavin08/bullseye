@@ -6,6 +6,7 @@ venv/
 .env
 .env.local
 *.log
+logs/
 .pytest_cache/
 .ruff_cache/
 .coverage
