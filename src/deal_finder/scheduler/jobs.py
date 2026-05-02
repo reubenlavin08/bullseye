@@ -431,19 +431,17 @@ def coordinator_tick() -> None:
 
     Each tick: pick the stalest watch and poll it. With a tick interval
     of N seconds and M active watches, each watch polls every M*N
-    seconds. This gives naturally-rate-aware behavior:
+    seconds.
 
-      - No initial burst (only one poll per tick, ever).
-      - Rate gate in the FB client never queues. Throughput is exactly
-        what we configure, predictable and steady.
-      - Newly-added watches get polled within N seconds because they
-        sort to the top of pick_next_watch_to_poll().
-      - When a watch is paused, it simply stops appearing in the
-        candidate set on the next tick.
-
-    Replaces the per-watch interval jobs that previously over-saturated
-    the rate gate at high N.
+    Adaptive backoff: when FB has been rate-limiting us recently, we
+    skip ticks proportional to the recent failure rate to let their
+    server cool down. Querying for "fb_rate_limit events in the last
+    60 seconds" is cheap (one indexed lookup) and saves us from
+    hammering FB during a sustained block.
     """
+    if _should_skip_tick_for_backoff():
+        return
+
     sid = pick_next_watch_to_poll()
     if sid is None:
         return
@@ -451,3 +449,41 @@ def coordinator_tick() -> None:
         poll_search(sid)
     except Exception as e:  # noqa: BLE001 — never let one watch kill the loop
         logger.exception("coordinator_tick(%s) crashed: %s", sid, e)
+
+
+def _should_skip_tick_for_backoff() -> bool:
+    """Return True if we should skip this tick because FB has been
+    rate-limiting recently.
+
+    Strategy: look at the rate-limit event count in the last 60s.
+      0 events  -> proceed (clean)
+      1-2       -> proceed (background noise)
+      3-5       -> skip with 50% probability
+      6+        -> skip
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT COUNT(*) FROM scheduler_events
+                       WHERE event_type = 'fb_rate_limit'
+                         AND created_at >= NOW() - INTERVAL '60 seconds'""",
+                )
+                recent = cur.fetchone()[0]
+    except Exception:  # noqa: BLE001
+        return False  # fail open
+
+    if recent <= 2:
+        return False
+    if recent >= 6:
+        logger.info("coordinator: skipping tick — %d rate-limits in last 60s", recent)
+        return True
+    # 3-5: probabilistic skip so we don't 100% halt
+    import random
+    if random.random() < 0.5:
+        logger.info(
+            "coordinator: probabilistic skip — %d rate-limits in last 60s",
+            recent,
+        )
+        return True
+    return False

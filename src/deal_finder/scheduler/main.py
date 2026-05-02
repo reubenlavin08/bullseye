@@ -58,7 +58,7 @@ DAILY_SUMMARY_INTERVAL_S = int(os.environ.get("DAILY_SUMMARY_INTERVAL_S", "3600"
 # client's rate gate (currently 8s) so we never hit the gate's queue.
 # At N=49 watches and 9s tick, each watch polls every 49*9 = ~7.4 min.
 # Pause watches you don't need to lower N and get faster polling.
-COORDINATOR_TICK_S = int(os.environ.get("COORDINATOR_TICK_S", "9"))
+COORDINATOR_TICK_S = int(os.environ.get("COORDINATOR_TICK_S", "15"))
 WARMUP_LLM_ON_BOOT = os.environ.get("WARMUP_LLM_ON_BOOT", "1") not in ("0", "")
 
 
