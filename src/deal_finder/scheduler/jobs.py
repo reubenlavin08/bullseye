@@ -353,3 +353,59 @@ def list_active_search_ids() -> list[int]:
                 "SELECT id FROM user_searches WHERE active = TRUE ORDER BY id",
             )
             return [r[0] for r in cur.fetchall()]
+
+
+def pick_next_watch_to_poll() -> int | None:
+    """Choose the stalest active watch to poll next.
+
+    Uses scheduler_events as the source of truth for "when did this
+    watch last poll?" so we naturally round-robin across N watches at
+    the rate gate's pace. Newly-added watches (no poll event yet)
+    sort first thanks to NULLS FIRST.
+
+    Returns None if there are no active watches.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT us.id
+                   FROM user_searches us
+                   LEFT JOIN LATERAL (
+                       SELECT MAX(created_at) AS last_polled
+                       FROM scheduler_events
+                       WHERE event_type = 'poll'
+                         AND search_id = us.id
+                   ) p ON TRUE
+                   WHERE us.active = TRUE
+                   ORDER BY p.last_polled ASC NULLS FIRST, us.id ASC
+                   LIMIT 1""",
+            )
+            row = cur.fetchone()
+    return row[0] if row else None
+
+
+def coordinator_tick() -> None:
+    """Single-job alternative to the per-watch APScheduler jobs.
+
+    Each tick: pick the stalest watch and poll it. With a tick interval
+    of N seconds and M active watches, each watch polls every M*N
+    seconds. This gives naturally-rate-aware behavior:
+
+      - No initial burst (only one poll per tick, ever).
+      - Rate gate in the FB client never queues. Throughput is exactly
+        what we configure, predictable and steady.
+      - Newly-added watches get polled within N seconds because they
+        sort to the top of pick_next_watch_to_poll().
+      - When a watch is paused, it simply stops appearing in the
+        candidate set on the next tick.
+
+    Replaces the per-watch interval jobs that previously over-saturated
+    the rate gate at high N.
+    """
+    sid = pick_next_watch_to_poll()
+    if sid is None:
+        return
+    try:
+        poll_search(sid)
+    except Exception as e:  # noqa: BLE001 — never let one watch kill the loop
+        logger.exception("coordinator_tick(%s) crashed: %s", sid, e)

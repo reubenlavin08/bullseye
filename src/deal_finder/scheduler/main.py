@@ -35,9 +35,9 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from ..appraisal.worker import warmup_models
 from ..db.events import record_event
 from .jobs import (
+    coordinator_tick,
     drain_appraisal_safety_net,
     list_active_search_ids,
-    poll_search,
     send_daily_summary_emails,
     send_digest_emails,
 )
@@ -45,7 +45,7 @@ from .jobs import (
 logger = logging.getLogger(__name__)
 
 
-POLL_INTERVAL_S = int(os.environ.get("POLL_INTERVAL_S", "60"))
+POLL_INTERVAL_S = int(os.environ.get("POLL_INTERVAL_S", "60"))  # legacy; ignored under coordinator
 SAFETY_NET_INTERVAL_S = int(os.environ.get("SAFETY_NET_INTERVAL_S", "600"))
 # Reload tick — how fast newly-saved searches get picked up. Was 300s
 # (5 min) which felt sluggish. 20s gives near-instant pickup without
@@ -53,72 +53,41 @@ SAFETY_NET_INTERVAL_S = int(os.environ.get("SAFETY_NET_INTERVAL_S", "600"))
 RELOAD_INTERVAL_S = int(os.environ.get("RELOAD_INTERVAL_S", "20"))
 DIGEST_INTERVAL_S = int(os.environ.get("DIGEST_INTERVAL_S", "15"))
 DAILY_SUMMARY_INTERVAL_S = int(os.environ.get("DAILY_SUMMARY_INTERVAL_S", "3600"))
+# Coordinator tick — how often the round-robin coordinator picks the
+# stalest watch and polls it. Should be slightly larger than the FB
+# client's rate gate (currently 8s) so we never hit the gate's queue.
+# At N=49 watches and 9s tick, each watch polls every 49*9 = ~7.4 min.
+# Pause watches you don't need to lower N and get faster polling.
+COORDINATOR_TICK_S = int(os.environ.get("COORDINATOR_TICK_S", "9"))
 WARMUP_LLM_ON_BOOT = os.environ.get("WARMUP_LLM_ON_BOOT", "1") not in ("0", "")
 
 
-def _job_id(search_id: int) -> str:
-    return f"poll_search_{search_id}"
-
-
 def reload_searches(scheduler: BlockingScheduler) -> None:
-    """Sync the scheduler's job set to whatever's in user_searches.active=TRUE.
+    """Recompute the active-watch count + log it.
 
-    Adds jobs for newly-active searches; removes jobs whose searches
-    were disabled or deleted. Idempotent.
+    Under the coordinator pattern there's no per-watch APScheduler job
+    to add/remove — the coordinator picks watches dynamically each
+    tick. This function still runs periodically to:
+      - report the current active-watch count via a 'reload' event
+        (used by the dashboard)
+      - log the effective per-watch poll interval given current N
     """
-    desired = set(list_active_search_ids())
-    current = {
-        j.id for j in scheduler.get_jobs() if j.id.startswith("poll_search_")
-    }
-    desired_ids = {_job_id(sid) for sid in desired}
-
-    removed_ids: list[int] = []
-    added_ids: list[int] = []
-
-    # Remove jobs for searches that are no longer active
-    for jid in current - desired_ids:
-        scheduler.remove_job(jid)
-        logger.info("removed job %s", jid)
-        try:
-            removed_ids.append(int(jid.rsplit("_", 1)[-1]))
-        except ValueError:
-            pass
-
-    # Add jobs for newly-active searches
-    for sid in desired:
-        jid = _job_id(sid)
-        if jid in current:
-            continue
-        # First run: a tiny stagger so adding 20 searches doesn't
-        # fire 20 scrapes at the same instant. Capped at 12s, so a
-        # newly-saved watch starts polling within seconds — not a
-        # full POLL_INTERVAL_S delay.
-        first_run_offset = min((sid * 3) % 12, 12)
-        scheduler.add_job(
-            poll_search,
-            args=[sid],
-            trigger="interval",
-            seconds=POLL_INTERVAL_S,
-            id=jid,
-            name=f"poll search {sid}",
-            max_instances=1,
-            coalesce=True,
-            next_run_time=(
-                datetime.now(timezone.utc) + timedelta(seconds=first_run_offset)
-            ),
-            misfire_grace_time=POLL_INTERVAL_S,
-        )
-        logger.info("scheduled %s every %ds (first run +%ds)",
-                    jid, POLL_INTERVAL_S, first_run_offset)
-        added_ids.append(sid)
-
-    if added_ids or removed_ids:
-        record_event(
-            "reload",
-            added=added_ids,
-            removed=removed_ids,
-            total_active=len(desired),
-        )
+    active = list_active_search_ids()
+    n = len(active)
+    eff_per_watch_s = COORDINATOR_TICK_S * max(n, 1)
+    logger.info(
+        "reload: %d active watch(es); coordinator tick %ds; "
+        "effective per-watch poll cadence ~%d sec (~%.1f min)",
+        n, COORDINATOR_TICK_S, eff_per_watch_s, eff_per_watch_s / 60,
+    )
+    record_event(
+        "reload",
+        added=[],
+        removed=[],
+        total_active=n,
+        coordinator_tick_s=COORDINATOR_TICK_S,
+        effective_per_watch_s=eff_per_watch_s,
+    )
 
 
 def _reload_tick(scheduler: BlockingScheduler) -> None:
@@ -190,10 +159,29 @@ def run_forever() -> int:
         timezone="UTC",
     )
 
-    # Initial population
+    # Initial reload tick (logs current active count + records event)
     reload_searches(scheduler)
 
-    # Periodic resync so newly-added or disabled searches are picked up
+    # ROUND-ROBIN COORDINATOR — single job that picks the stalest active
+    # watch each tick and polls it. Replaces the old per-watch interval
+    # jobs which over-saturated FB's rate limit at high N.
+    #
+    # First run +2s so we don't fire concurrently with reload_searches.
+    scheduler.add_job(
+        coordinator_tick,
+        trigger="interval",
+        seconds=COORDINATOR_TICK_S,
+        id="coordinator",
+        name="round-robin watch coordinator",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=2),
+        misfire_grace_time=COORDINATOR_TICK_S,
+    )
+    logger.info("coordinator tick every %ds", COORDINATOR_TICK_S)
+
+    # Periodic reload tick — under the coordinator pattern this just
+    # logs the current active-watch count + emits a 'reload' event.
     scheduler.add_job(
         _reload_tick,
         args=[scheduler],
