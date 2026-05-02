@@ -32,16 +32,39 @@ class EmailResult:
 
 
 def send_email(*, to: str, subject: str, html: str, text: str = "") -> EmailResult:
-    """Dispatch one email via the configured backend."""
+    """Dispatch one email via the configured backend.
+
+    Records a 'email_sent' or 'email_failed' scheduler_event regardless
+    of backend so the dashboard can show delivery rate / failure causes.
+    """
     backend = os.environ.get("ALERT_BACKEND", "console").lower()
     if backend == "console":
-        return _send_console(to=to, subject=subject, html=html, text=text)
-    if backend == "smtp":
-        return _send_smtp(to=to, subject=subject, html=html, text=text)
-    if backend == "resend":
-        return _send_resend(to=to, subject=subject, html=html, text=text)
-    return EmailResult(ok=False, backend=backend,
-                       message=f"unknown ALERT_BACKEND: {backend}")
+        result = _send_console(to=to, subject=subject, html=html, text=text)
+    elif backend == "smtp":
+        result = _send_smtp(to=to, subject=subject, html=html, text=text)
+    elif backend == "resend":
+        result = _send_resend(to=to, subject=subject, html=html, text=text)
+    else:
+        result = EmailResult(
+            ok=False, backend=backend,
+            message=f"unknown ALERT_BACKEND: {backend}",
+        )
+
+    # Persist event. Local import — alerts.email shouldn't transitively
+    # require a DB at import time (the test suite stubs out send_email).
+    try:
+        from ..db.events import record_event
+        record_event(
+            "email_sent" if result.ok else "email_failed",
+            recipient=to,
+            backend=result.backend,
+            subject=subject[:200],
+            error=result.message[:300] if not result.ok else None,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return result
 
 
 # --- console (DRY-RUN) ----------------------------------------------------

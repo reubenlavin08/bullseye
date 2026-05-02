@@ -30,6 +30,7 @@ from ..appraisal.normalizer import normalize_title
 from ..appraisal.worker import _recover_price, drain_queue
 from ..comps.marketplace import get_comps
 from ..db.connection import get_conn
+from ..db.events import record_event
 from ..db.listings import (
     existing_ids,
     update_appraisal,
@@ -90,16 +91,27 @@ def poll_search(search_id: int) -> PollResult:
     # 2) Filter out already-seen listing IDs (cheap PK lookup)
     raw_ids = [sl.id for sl in page.listings]
     if not raw_ids:
-        return PollResult(search_id, keyword, 0, 0, 0, 0, time.perf_counter() - t0)
+        elapsed_s = time.perf_counter() - t0
+        record_event(
+            "poll", search_id=search_id, duration_ms=int(elapsed_s * 1000),
+            keyword=keyword, raw_count=0, new_count=0,
+            appraised_count=0, rejected_count=0,
+        )
+        return PollResult(search_id, keyword, 0, 0, 0, 0, elapsed_s)
 
     with get_conn() as conn:
         seen = existing_ids(conn, raw_ids)
 
     new_listings = [sl for sl in page.listings if sl.id not in seen]
     if not new_listings:
+        elapsed_s = time.perf_counter() - t0
+        record_event(
+            "poll", search_id=search_id, duration_ms=int(elapsed_s * 1000),
+            keyword=keyword, raw_count=len(page.listings),
+            new_count=0, appraised_count=0, rejected_count=0,
+        )
         return PollResult(
-            search_id, keyword, len(page.listings), 0, 0, 0,
-            time.perf_counter() - t0,
+            search_id, keyword, len(page.listings), 0, 0, 0, elapsed_s,
         )
 
     logger.info(
@@ -115,15 +127,33 @@ def poll_search(search_id: int) -> PollResult:
             outcome = _process_new_listing(sl, search_id=search_id)
         except Exception as e:  # noqa: BLE001 — never let one bad listing kill the loop
             logger.exception("processing %s failed: %s", sl.id, e)
+            record_event(
+                "pipeline_error",
+                search_id=search_id,
+                listing_id=sl.id,
+                error=str(e)[:300],
+                error_type=type(e).__name__,
+            )
             continue
         if outcome == "appraised":
             appraised += 1
         elif outcome == "rejected":
             rejected += 1
 
+    elapsed_s = time.perf_counter() - t0
+    record_event(
+        "poll",
+        search_id=search_id,
+        duration_ms=int(elapsed_s * 1000),
+        keyword=keyword,
+        raw_count=len(page.listings),
+        new_count=len(new_listings),
+        appraised_count=appraised,
+        rejected_count=rejected,
+    )
     return PollResult(
         search_id, keyword, len(page.listings), len(new_listings),
-        appraised, rejected, time.perf_counter() - t0,
+        appraised, rejected, elapsed_s,
     )
 
 
@@ -281,6 +311,12 @@ def drain_appraisal_safety_net() -> None:
         logger.info(
             "safety net drained %d (appraised=%d, skipped=%d)",
             stats.seen, stats.appraised, stats.skipped_no_score,
+        )
+        record_event(
+            "safety_drain",
+            seen=stats.seen,
+            appraised=stats.appraised,
+            skipped_no_score=stats.skipped_no_score,
         )
 
 

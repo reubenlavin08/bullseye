@@ -31,6 +31,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from ..appraisal.worker import warmup_models
+from ..db.events import record_event
 from .jobs import (
     drain_appraisal_safety_net,
     list_active_search_ids,
@@ -69,10 +70,17 @@ def reload_searches(scheduler: BlockingScheduler) -> None:
     }
     desired_ids = {_job_id(sid) for sid in desired}
 
+    removed_ids: list[int] = []
+    added_ids: list[int] = []
+
     # Remove jobs for searches that are no longer active
     for jid in current - desired_ids:
         scheduler.remove_job(jid)
         logger.info("removed job %s", jid)
+        try:
+            removed_ids.append(int(jid.rsplit("_", 1)[-1]))
+        except ValueError:
+            pass
 
     # Add jobs for newly-active searches
     for sid in desired:
@@ -100,6 +108,15 @@ def reload_searches(scheduler: BlockingScheduler) -> None:
         )
         logger.info("scheduled %s every %ds (first run +%ds)",
                     jid, POLL_INTERVAL_S, first_run_offset)
+        added_ids.append(sid)
+
+    if added_ids or removed_ids:
+        record_event(
+            "reload",
+            added=added_ids,
+            removed=removed_ids,
+            total_active=len(desired),
+        )
 
 
 def _reload_tick(scheduler: BlockingScheduler) -> None:
@@ -187,6 +204,16 @@ def run_forever() -> int:
     logger.info(
         "scheduler running: %d active search(es), poll=%ds, safety=%ds",
         n_searches, POLL_INTERVAL_S, SAFETY_NET_INTERVAL_S,
+    )
+    record_event(
+        "scheduler_boot",
+        pid=os.getpid(),
+        n_active_searches=n_searches,
+        poll_interval_s=POLL_INTERVAL_S,
+        safety_net_interval_s=SAFETY_NET_INTERVAL_S,
+        reload_interval_s=RELOAD_INTERVAL_S,
+        digest_interval_s=DIGEST_INTERVAL_S,
+        alert_backend=os.environ.get("ALERT_BACKEND", "console"),
     )
     if n_searches == 0:
         logger.warning(

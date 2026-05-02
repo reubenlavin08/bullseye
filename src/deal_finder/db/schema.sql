@@ -170,3 +170,34 @@ ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS daily_summary_enabled BOOLEAN N
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS last_summary_sent_at  TIMESTAMPTZ;
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS last_digest_sent_at   TIMESTAMPTZ;
 ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS confirmation_sent_at  TIMESTAMPTZ;
+
+-- ---------------------------------------------------------------------
+-- scheduler_events — observability log for the dashboard.
+-- One row per significant scheduler event so we can render aggregates
+-- (polls/hr, rate-limit count today, score histogram) and an event tail
+-- without parsing stdout. See db/events.py for the writer helper.
+--
+-- event_type values currently emitted:
+--   poll              - one poll_search() cycle (raw_count, new_count, etc)
+--   fb_rate_limit     - Marketplace returned a 429-ish error
+--   email_sent        - successful send via console/smtp/resend
+--   email_failed      - send failed (auth, network, rate limit)
+--   safety_drain      - safety-net appraisal pass result
+--   reload            - reload_searches() added/removed jobs
+--   scheduler_boot    - run_forever() started
+--   pipeline_error    - any uncaught exception in _process_new_listing
+--
+-- detail is opaque JSONB for flexibility; the dashboard knows which
+-- fields to expect per event_type.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS scheduler_events (
+    id          BIGSERIAL PRIMARY KEY,
+    event_type  TEXT        NOT NULL,
+    search_id   INTEGER,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    duration_ms INTEGER,
+    detail      JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_events_created_at  ON scheduler_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_type_time   ON scheduler_events (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_search_time ON scheduler_events (search_id, created_at DESC);

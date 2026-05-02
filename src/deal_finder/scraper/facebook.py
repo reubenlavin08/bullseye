@@ -260,6 +260,24 @@ class FacebookSearchClient:
                 "fb-search GraphQL errors: %s",
                 json.dumps(body["errors"])[:500],
             )
+            # Persist any rate-limit / critical errors so the dashboard
+            # can show them. Local import to avoid a circular at module
+            # load time (db.events imports db.connection imports
+            # nothing from scraper, but the future-proof keeps it lazy).
+            try:
+                from ..db.events import record_event
+                for err in body.get("errors") or []:
+                    msg = (err.get("message") or "").lower()
+                    code = err.get("code")
+                    is_rate_limit = "rate limit" in msg or code == 1675004
+                    record_event(
+                        "fb_rate_limit" if is_rate_limit else "fb_graphql_error",
+                        code=code,
+                        message=(err.get("message") or "")[:200],
+                        severity=err.get("severity"),
+                    )
+            except Exception:  # noqa: BLE001 — never crash the scraper
+                pass
 
         edges, end_cursor = _walk_search_edges(body)
 
