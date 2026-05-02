@@ -742,35 +742,43 @@ def attribute_listing(
 
 
 def coordinator_tick() -> None:
-    """Pick a batch of K stalest watches sharing location, run ONE FB
-    search covering all their keywords, and attribute results back to
-    individual watches for processing.
+    """Pick the stalest watch and run one FB search for it.
 
-    Why batch: per-watch polling at N=49 watches and a 15s rate gate
-    means each watch polls every 12 minutes. Batching K=4 means each
-    BATCH polls every 15s and each watch's keyword gets coverage every
-    ~3 minutes — a 4x speedup with no extra rate-limit cost.
-
-    The catch: a single FB search returns listings matching ANY of the
-    combined keywords. We then attribute each listing to the
-    most-specific-matching watch via attribute_listing(). False
-    positives (listings that match no watch's keyword) are dropped.
-    Per-watch filters (must_include/must_exclude, distance) run AFTER
-    attribution.
+    Polling mode is controlled by env var BATCH_POLL_MODE:
+      "off" (default) — single-watch polling. Each tick fires one FB
+        search for the stalest watch's keyword, processes only listings
+        that come back. Predictable, accurate, FB returns relevant
+        results for that one keyword.
+      "on" — combined-keyword batching. K=BATCH_SIZE stalest watches
+        share one FB call with a space-joined keyword. RISKY: we
+        haven't empirically verified that FB returns OR-matching
+        results for multi-word queries; it may rank by AND-relevance
+        and miss the less-popular keywords. Off until verified.
 
     Adaptive backoff: when FB is rate-limiting heavily, skip the tick.
     """
     if _should_skip_tick_for_backoff():
         return
 
-    batch = pick_next_watch_batch()
-    if not batch:
+    if os.environ.get("BATCH_POLL_MODE", "off").lower() == "on":
+        batch = pick_next_watch_batch()
+        if not batch:
+            return
+        try:
+            poll_batch(batch)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("coordinator_tick batch %s crashed: %s",
+                             [w["id"] for w in batch], e)
+        return
+
+    # Default: single-watch polling
+    sid = pick_next_watch_to_poll()
+    if sid is None:
         return
     try:
-        poll_batch(batch)
+        poll_search(sid)
     except Exception as e:  # noqa: BLE001
-        logger.exception("coordinator_tick batch %s crashed: %s",
-                         [w["id"] for w in batch], e)
+        logger.exception("coordinator_tick(%s) crashed: %s", sid, e)
 
 
 def _should_skip_tick_for_backoff() -> bool:
