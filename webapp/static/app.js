@@ -994,6 +994,98 @@
         return d + "d ago";
     }
 
+    // ---------- BULK EDIT ALL WATCHES -------------------------------------
+    //
+    // Each row in the bulk-edit form is a (checkbox, input) pair. Only
+    // checked rows participate in the update payload — so the user can
+    // change just the threshold without accidentally clearing prices.
+    function setupBulkEdit() {
+        const btn = document.getElementById("bulk-apply-btn");
+        const status = document.getElementById("bulk-apply-status");
+        if (!btn) return;
+
+        // Map: payload field -> {check, value-getter}
+        const fields = {
+            score_threshold:        () => ({on: document.getElementById("bulk-thresh-on").checked,
+                                           v: document.getElementById("bulk-thresh").value}),
+            radius_km:              () => ({on: document.getElementById("bulk-radius-on").checked,
+                                           v: document.getElementById("bulk-radius").value}),
+            price_min:              () => ({on: document.getElementById("bulk-pmin-on").checked,
+                                           v: document.getElementById("bulk-pmin").value}),
+            price_max:              () => ({on: document.getElementById("bulk-pmax-on").checked,
+                                           v: document.getElementById("bulk-pmax").value}),
+            daily_summary_enabled:  () => ({on: document.getElementById("bulk-summary-on").checked,
+                                           v: document.getElementById("bulk-summary").value}),
+            active:                 () => ({on: document.getElementById("bulk-active-on").checked,
+                                           v: document.getElementById("bulk-active").value}),
+        };
+
+        // Auto-tick the checkbox when the user types in its input — saves a
+        // confused "why didn't anything happen" moment.
+        const pairs = [
+            ["bulk-thresh", "bulk-thresh-on"],
+            ["bulk-radius", "bulk-radius-on"],
+            ["bulk-pmin",    "bulk-pmin-on"],
+            ["bulk-pmax",    "bulk-pmax-on"],
+            ["bulk-summary", "bulk-summary-on"],
+            ["bulk-active",  "bulk-active-on"],
+        ];
+        pairs.forEach(([inp, chk]) => {
+            const i = document.getElementById(inp);
+            const c = document.getElementById(chk);
+            if (!i || !c) return;
+            i.addEventListener("input",  () => { c.checked = true; });
+            i.addEventListener("change", () => { c.checked = true; });
+        });
+
+        btn.addEventListener("click", async () => {
+            const payload = {};
+            for (const [key, getFn] of Object.entries(fields)) {
+                const {on, v} = getFn();
+                if (on) payload[key] = v;
+            }
+            if (Object.keys(payload).length === 0) {
+                status.textContent = "tick at least one box first";
+                status.classList.add("is-error");
+                return;
+            }
+
+            const summary = Object.entries(payload)
+                .map(([k, v]) => k + "=" + v).join(", ");
+            if (!confirm(
+                `Apply to ALL watches:\n\n  ${summary}\n\n` +
+                `Continue?`
+            )) return;
+
+            btn.disabled = true;
+            status.classList.remove("is-error");
+            status.textContent = "applying…";
+            try {
+                const res = await fetch("/api/watches/bulk-update", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    status.textContent =
+                        `✓ updated ${data.watches_updated} watch row(s), ` +
+                        `${data.subscribers_updated} subscription row(s)`;
+                    // Refresh the watches list so user sees the change
+                    document.getElementById("watches-refresh").click();
+                } else {
+                    status.classList.add("is-error");
+                    status.textContent = "failed: " + (data.error || "unknown");
+                }
+            } catch (err) {
+                status.classList.add("is-error");
+                status.textContent = "network error: " + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    }
+
     function bootAll() {
         init();
         setupReveal();
@@ -1004,6 +1096,7 @@
         setupBulkForm();
         setupSubscribeForm();
         setupWatchesDashboard();
+        setupBulkEdit();
         setupSearchScroll();
     }
 

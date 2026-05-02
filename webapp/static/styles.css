@@ -1710,6 +1710,115 @@ em, .italic {
     background: rgba(154, 42, 42, 0.06);
 }
 
+/* ---- Bulk-edit (apply to all watches) ---- */
+.bulk-edit {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 0;
+    margin: 16px 0 18px;
+    background: rgba(194, 65, 12, 0.03);
+}
+.bulk-edit-summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    user-select: none;
+}
+.bulk-edit-summary::-webkit-details-marker { display: none; }
+.bulk-edit-summary::before {
+    content: "▸";
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    transition: transform 160ms var(--ease);
+    display: inline-block;
+}
+.bulk-edit[open] .bulk-edit-summary::before { transform: rotate(90deg); }
+.bulk-edit-stamp {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    padding: 2px 9px;
+    background: var(--bg);
+}
+.bulk-edit-hint {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+}
+
+.bulk-edit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+    padding: 4px 14px 12px;
+}
+.bulk-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+}
+.bulk-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.bulk-row input[type="checkbox"] {
+    flex-shrink: 0;
+    width: 14px; height: 14px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.bulk-row input[type="number"],
+.bulk-row select {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--fg);
+}
+.bulk-row input[type="number"]:focus,
+.bulk-row select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.bulk-edit-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 14px 14px;
+}
+.bulk-apply-status {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+}
+.bulk-apply-status.is-error { color: var(--bad); }
+
+@media (max-width: 540px) {
+    .bulk-edit-grid { grid-template-columns: 1fr; }
+}
+
 .watches-list {
     display: flex;
     flex-direction: column;

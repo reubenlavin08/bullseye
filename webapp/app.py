@@ -888,6 +888,114 @@ def api_watches_patch(watch_id: int):
     return jsonify({"ok": True, "id": watch_id, "updated": {**us_updates, **sub_updates}})
 
 
+@app.route("/api/watches/bulk-update", methods=["POST"])
+def api_watches_bulk_update():
+    """Apply the same field update to EVERY watch (or a filtered subset).
+
+    Body fields (any subset; same semantics as PATCH /api/watches/<id>):
+      active, score_threshold, daily_summary_enabled,
+      radius_km, price_min, price_max,
+      must_include, must_exclude
+
+    Optional filter:
+      only_active=true    -> apply only to currently-active watches
+                             (skip paused ones, useful for "set thresholds"
+                             without un-pausing things)
+
+    Empty body or no recognized fields -> 400. Always returns the
+    counts of rows actually touched on user_searches and subscribers.
+    """
+    data = request.form if request.form else (request.get_json(silent=True) or {})
+
+    def _opt_int(name: str) -> int | None:
+        v = data.get(name)
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be an integer")
+
+    def _opt_bool(name: str) -> bool | None:
+        if name not in data:
+            return None
+        v = data.get(name)
+        if isinstance(v, bool):
+            return v
+        return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+    us_updates: dict[str, object] = {}
+    sub_updates: dict[str, object] = {}
+
+    try:
+        if "active" in data:
+            us_updates["active"] = _opt_bool("active")
+            sub_updates["active"] = us_updates["active"]
+        if "radius_km" in data:
+            r_km = _opt_int("radius_km")
+            if r_km is None or not (1 <= r_km <= 500):
+                return jsonify({"ok": False, "error": "radius_km must be 1-500"}), 400
+            us_updates["radius_km"] = r_km
+        if "price_min" in data:
+            us_updates["price_min"] = _opt_int("price_min")
+        if "price_max" in data:
+            us_updates["price_max"] = _opt_int("price_max")
+        if "must_include" in data:
+            v = (data.get("must_include") or "").strip()
+            us_updates["must_include"] = v if v else None
+        if "must_exclude" in data:
+            v = (data.get("must_exclude") or "").strip()
+            us_updates["must_exclude"] = v if v else None
+        if "score_threshold" in data:
+            t = _opt_int("score_threshold")
+            if t is None or not (0 <= t <= 100):
+                return jsonify({"ok": False, "error": "score_threshold must be 0-100"}), 400
+            sub_updates["score_threshold"] = t
+        if "daily_summary_enabled" in data:
+            sub_updates["daily_summary_enabled"] = _opt_bool("daily_summary_enabled")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    if not us_updates and not sub_updates:
+        return jsonify({"ok": False, "error": "no valid fields to update"}), 400
+
+    only_active = str(data.get("only_active", "")).strip().lower() in ("1", "true", "yes", "on")
+
+    us_filter = " WHERE active = TRUE" if only_active else ""
+    sub_filter_join = (
+        " AND search_id IN (SELECT id FROM user_searches WHERE active = TRUE)"
+        if only_active else ""
+    )
+
+    us_count = 0
+    sub_count = 0
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                if us_updates:
+                    set_clause = ", ".join(f"{k} = %s" for k in us_updates)
+                    cur.execute(
+                        f"UPDATE user_searches SET {set_clause}{us_filter}",
+                        list(us_updates.values()),
+                    )
+                    us_count = cur.rowcount
+                if sub_updates:
+                    set_clause = ", ".join(f"{k} = %s" for k in sub_updates)
+                    cur.execute(
+                        f"UPDATE subscribers SET {set_clause} WHERE TRUE{sub_filter_join}",
+                        list(sub_updates.values()),
+                    )
+                    sub_count = cur.rowcount
+
+    return jsonify({
+        "ok": True,
+        "watches_updated": us_count,
+        "subscribers_updated": sub_count,
+        "fields": {**us_updates, **sub_updates},
+        "only_active": only_active,
+    })
+
+
 @app.route("/api/watches/<int:watch_id>", methods=["DELETE"])
 def api_watches_delete(watch_id: int):
     """Delete a watch outright. Subscribers cascade via FK ON DELETE CASCADE.

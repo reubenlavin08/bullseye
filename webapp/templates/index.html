@@ -290,6 +290,68 @@ multimeter"
                     edit alert thresholds, pause a watch, or delete it.
                     changes apply on the scheduler's next reload tick (~20s).
                 </p>
+
+                <details class="bulk-edit">
+                    <summary class="bulk-edit-summary">
+                        <span class="bulk-edit-stamp">apply to all watches</span>
+                        <span class="muted bulk-edit-hint">change one attribute on every watch at once</span>
+                    </summary>
+                    <div class="bulk-edit-grid">
+                        <label class="bulk-field">
+                            <span>Score threshold</span>
+                            <div class="bulk-row">
+                                <input type="checkbox" id="bulk-thresh-on">
+                                <input type="number" id="bulk-thresh" min="0" max="100" placeholder="0–100">
+                            </div>
+                        </label>
+                        <label class="bulk-field">
+                            <span>Radius (km)</span>
+                            <div class="bulk-row">
+                                <input type="checkbox" id="bulk-radius-on">
+                                <input type="number" id="bulk-radius" min="1" max="500" placeholder="1–500">
+                            </div>
+                        </label>
+                        <label class="bulk-field">
+                            <span>Min price ($)</span>
+                            <div class="bulk-row">
+                                <input type="checkbox" id="bulk-pmin-on">
+                                <input type="number" id="bulk-pmin" min="0" placeholder="leave blank to clear">
+                            </div>
+                        </label>
+                        <label class="bulk-field">
+                            <span>Max price ($)</span>
+                            <div class="bulk-row">
+                                <input type="checkbox" id="bulk-pmax-on">
+                                <input type="number" id="bulk-pmax" min="0" placeholder="leave blank to clear">
+                            </div>
+                        </label>
+                        <label class="bulk-field">
+                            <span>Daily summary</span>
+                            <div class="bulk-row">
+                                <input type="checkbox" id="bulk-summary-on">
+                                <select id="bulk-summary">
+                                    <option value="true">on</option>
+                                    <option value="false">off</option>
+                                </select>
+                            </div>
+                        </label>
+                        <label class="bulk-field">
+                            <span>Active</span>
+                            <div class="bulk-row">
+                                <input type="checkbox" id="bulk-active-on">
+                                <select id="bulk-active">
+                                    <option value="true">resume all</option>
+                                    <option value="false">pause all</option>
+                                </select>
+                            </div>
+                        </label>
+                    </div>
+                    <div class="bulk-edit-actions">
+                        <button type="button" id="bulk-apply-btn" class="btn-tiny">Apply to all</button>
+                        <span id="bulk-apply-status" class="muted bulk-apply-status"></span>
+                    </div>
+                </details>
+
                 <div id="watches-list" class="watches-list">
                     <div class="watches-empty muted">loading watches…</div>
                 </div>

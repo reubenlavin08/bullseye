@@ -30,6 +30,7 @@ from datetime import datetime
 from html import escape
 
 from ..db.connection import get_conn
+from ..db.geo import geocode_city, haversine_km
 from .email import send_email
 
 logger = logging.getLogger(__name__)
@@ -52,10 +53,74 @@ class DigestMatch:
     keyword: str               # the saved-search keyword that matched
 
 
+def _passes_watch_bounds(
+    *, price: float | None, seller_location: str | None,
+    home_lat: float, home_lng: float,
+    radius_km: int | None,
+    price_min: int | None, price_max: int | None,
+) -> tuple[bool, str | None]:
+    """Reapply the watch's price + radius bounds to a candidate match.
+
+    Returns (kept, reason). reason is set when kept=False, used to
+    annotate the suppressed row so it's never re-considered.
+
+    Why this lives here: poll_search applies the same filters when
+    listings ARE NEW. But the digest worker pulls listings that may
+    have been ingested before the filters existed, or before the user
+    tightened their bounds. This is the last-line defense: if a
+    listing made it this far but doesn't fit the user's box, drop it.
+    """
+    # Price gate — strict equality to user input, no soft buffer.
+    if price is not None:
+        if price_min is not None and price < price_min:
+            return False, f"price ${price:.0f} < min ${price_min}"
+        if price_max is not None and price > price_max:
+            return False, f"price ${price:.0f} > max ${price_max}"
+    # Distance gate — haversine on the geocoded city center, with the
+    # same soft buffer poll_search uses (max(r+8, r*1.3)).
+    if not radius_km or not seller_location:
+        return True, None
+    coords = geocode_city(seller_location)
+    if coords is None:
+        return True, None  # fail open on geocode error
+    dist = haversine_km(home_lat, home_lng, coords[0], coords[1])
+    soft = max(float(radius_km) + 8.0, float(radius_km) * 1.3)
+    if dist > soft:
+        return False, f"{dist:.0f} km > {soft:.0f} km soft radius"
+    return True, None
+
+
+def _suppress_listings(listing_ids: list[str], reason: str) -> None:
+    """Mark listings as 'notified' (i.e. terminally handled) without
+    actually emailing them, with an appraisal_note suffix recording
+    why. Used by the digest worker when a listing fails the user's
+    bounds at email time. They will not be re-considered.
+    """
+    if not listing_ids:
+        return
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE listings SET
+                          notified = TRUE,
+                          notified_at = NOW(),
+                          appraisal_note = COALESCE(appraisal_note, '')
+                                          || ' [suppressed: ' || %s || ']'
+                       WHERE id = ANY(%s)""",
+                    (reason, listing_ids),
+                )
+
+
 def collect_pending_for_email(email: str) -> list[DigestMatch]:
     """All not-yet-notified, score-passing listings for this email's
-    subscriptions, across every search they're subscribed to."""
-    matches: list[DigestMatch] = []
+    subscriptions, across every search they're subscribed to.
+
+    Applies the watch's price + radius bounds as a final gate (so old
+    DB listings ingested before the distance filter existed don't
+    sneak through). Anything that fails is suppressed in the DB and
+    omitted from the returned list."""
+    raw_rows = []
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -65,7 +130,9 @@ def collect_pending_for_email(email: str) -> list[DigestMatch]:
                           l.listed_at,
                           l.appraisal_breakdown,
                           us.keyword,
-                          s.score_threshold
+                          s.score_threshold,
+                          us.latitude, us.longitude, us.radius_km,
+                          us.price_min, us.price_max
                    FROM subscribers s
                    JOIN user_searches us ON us.id = s.search_id
                    JOIN listings l ON l.search_id = s.search_id
@@ -79,23 +146,49 @@ def collect_pending_for_email(email: str) -> list[DigestMatch]:
                    ORDER BY l.deal_score DESC, l.scraped_at DESC""",
                 (email,),
             )
-            for r in cur.fetchall():
-                bd = r[10] or {}
-                matches.append(DigestMatch(
-                    listing_id=r[0],
-                    title=r[1] or "",
-                    asking_price=float(r[2]) if r[2] is not None else None,
-                    fair_value=float(r[3]) if r[3] is not None else None,
-                    deal_score=int(r[4]),
-                    confidence_label=bd.get("confidence_label"),
-                    confidence_pm=bd.get("confidence_pm"),
-                    appraisal_note=r[5],
-                    listing_url=r[6] or "",
-                    photo_url=r[7],
-                    seller_location=r[8],
-                    listed_at=r[9],
-                    keyword=r[11],
-                ))
+            raw_rows = cur.fetchall()
+
+    matches: list[DigestMatch] = []
+    suppress_by_reason: dict[str, list[str]] = {}
+    for r in raw_rows:
+        bd = r[10] or {}
+        price = float(r[2]) if r[2] is not None else None
+        ok, reason = _passes_watch_bounds(
+            price=price,
+            seller_location=r[8],
+            home_lat=float(r[13]),
+            home_lng=float(r[14]),
+            radius_km=r[15],
+            price_min=r[16],
+            price_max=r[17],
+        )
+        if not ok:
+            suppress_by_reason.setdefault(reason or "out of bounds", []).append(r[0])
+            continue
+        matches.append(DigestMatch(
+            listing_id=r[0],
+            title=r[1] or "",
+            asking_price=price,
+            fair_value=float(r[3]) if r[3] is not None else None,
+            deal_score=int(r[4]),
+            confidence_label=bd.get("confidence_label"),
+            confidence_pm=bd.get("confidence_pm"),
+            appraisal_note=r[5],
+            listing_url=r[6] or "",
+            photo_url=r[7],
+            seller_location=r[8],
+            listed_at=r[9],
+            keyword=r[11],
+        ))
+
+    # Suppress out-of-bounds listings so they never get re-checked.
+    for reason, ids in suppress_by_reason.items():
+        _suppress_listings(ids, reason)
+        logger.info(
+            "suppressed %d out-of-bounds listing(s) for %s: %s",
+            len(ids), email, reason,
+        )
+
     return matches
 
 
@@ -197,14 +290,36 @@ def send_daily_summaries() -> dict:
     }
 
 
+def _suppress_for_summary(listing_ids: list[str], reason: str) -> None:
+    """Daily-summary equivalent of _suppress_listings — mark
+    summarized_at so the listing won't appear in future summaries,
+    with an annotation explaining why."""
+    if not listing_ids:
+        return
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE listings SET
+                          summarized_at = NOW(),
+                          appraisal_note = COALESCE(appraisal_note, '')
+                                          || ' [summary-suppressed: ' || %s || ']'
+                       WHERE id = ANY(%s)""",
+                    (reason, listing_ids),
+                )
+
+
 def _collect_summary_for_email(email: str) -> list[DigestMatch]:
     """Listings appraised in the last 24h on the subscriber's watches
     that scored BELOW their alert threshold (so they weren't sent as
     instant alerts) and haven't been summarized yet.
 
     The whole point: 'here's what we appraised today that didn't make
-    the cut. Did any of these still look interesting to you?'"""
-    matches: list[DigestMatch] = []
+    the cut. Did any of these still look interesting to you?'
+
+    Same bounds-recheck logic as collect_pending_for_email — out-of-
+    range listings get suppressed, never appear in summaries."""
+    raw_rows = []
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -213,7 +328,9 @@ def _collect_summary_for_email(email: str) -> list[DigestMatch]:
                           l.listing_url, l.photo_url, l.seller_location,
                           l.listed_at,
                           l.appraisal_breakdown,
-                          us.keyword
+                          us.keyword,
+                          us.latitude, us.longitude, us.radius_km,
+                          us.price_min, us.price_max
                    FROM subscribers s
                    JOIN user_searches us ON us.id = s.search_id
                    JOIN listings l ON l.search_id = s.search_id
@@ -227,27 +344,49 @@ def _collect_summary_for_email(email: str) -> list[DigestMatch]:
                      AND l.summarized_at IS NULL
                      AND l.appraised_at >= NOW() - INTERVAL '24 hours'
                    ORDER BY l.deal_score DESC, l.appraised_at DESC
-                   LIMIT 30""",
+                   LIMIT 50""",
                 (email,),
             )
-            for r in cur.fetchall():
-                bd = r[10] or {}
-                matches.append(DigestMatch(
-                    listing_id=r[0],
-                    title=r[1] or "",
-                    asking_price=float(r[2]) if r[2] is not None else None,
-                    fair_value=float(r[3]) if r[3] is not None else None,
-                    deal_score=int(r[4]),
-                    confidence_label=bd.get("confidence_label"),
-                    confidence_pm=bd.get("confidence_pm"),
-                    appraisal_note=r[5],
-                    listing_url=r[6] or "",
-                    photo_url=r[7],
-                    seller_location=r[8],
-                    listed_at=r[9],
-                    keyword=r[11],
-                ))
-    return matches
+            raw_rows = cur.fetchall()
+
+    matches: list[DigestMatch] = []
+    suppress_by_reason: dict[str, list[str]] = {}
+    for r in raw_rows:
+        bd = r[10] or {}
+        price = float(r[2]) if r[2] is not None else None
+        ok, reason = _passes_watch_bounds(
+            price=price,
+            seller_location=r[8],
+            home_lat=float(r[12]),
+            home_lng=float(r[13]),
+            radius_km=r[14],
+            price_min=r[15],
+            price_max=r[16],
+        )
+        if not ok:
+            suppress_by_reason.setdefault(reason or "out of bounds", []).append(r[0])
+            continue
+        matches.append(DigestMatch(
+            listing_id=r[0],
+            title=r[1] or "",
+            asking_price=price,
+            fair_value=float(r[3]) if r[3] is not None else None,
+            deal_score=int(r[4]),
+            confidence_label=bd.get("confidence_label"),
+            confidence_pm=bd.get("confidence_pm"),
+            appraisal_note=r[5],
+            listing_url=r[6] or "",
+            photo_url=r[7],
+            seller_location=r[8],
+            listed_at=r[9],
+            keyword=r[11],
+        ))
+
+    for reason, ids in suppress_by_reason.items():
+        _suppress_for_summary(ids, reason)
+
+    # Cap at 30 for email render — same as before.
+    return matches[:30]
 
 
 def _render_summary(
