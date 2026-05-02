@@ -136,6 +136,12 @@ def _fetch_observations(
 ) -> list[CompObservation]:
     """Run a Marketplace search and convert the listings into comp observations.
 
+    Category filtering: FB's `filter_category_id` parameter is silently
+    ignored on the public search GraphQL (verified empirically — passing
+    it returns the same mixed-category set). So we filter CLIENT-SIDE:
+    after fetching, drop any listing whose category_id doesn't match
+    the target's. This solves the cars-vs-dashcams bug.
+
     For $0/$1 placeholder listings, attempt to recover the real price
     via detail-fetch + extraction (up to PLACEHOLDER_RECOVERY_BUDGET).
     Anything still placeholder after that is dropped.
@@ -145,6 +151,21 @@ def _fetch_observations(
         lat=lat, lng=lng, radius_km=radius_km,
         category_id=category_id,
     ))
+
+    # Client-side category filter (FB's server-side one is broken).
+    if category_id:
+        before = len(page.listings)
+        page.listings = [
+            sl for sl in page.listings
+            if sl.category_id == category_id or not sl.category_id
+        ]
+        dropped = before - len(page.listings)
+        if dropped:
+            logger.info(
+                "category filter dropped %d/%d off-category comps "
+                "(target_cat=%s, term=%r)",
+                dropped, before, category_id, search_term,
+            )
 
     out: list[CompObservation] = []
     placeholder_attempts = 0
