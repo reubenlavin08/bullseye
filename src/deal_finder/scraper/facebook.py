@@ -1,0 +1,398 @@
+"""Facebook Marketplace search client.
+
+Production version of `scripts/spike_fb_scraper.py`. Same GraphQL endpoint,
+same `doc_id`, but with:
+
+  * typed dataclasses instead of dicts
+  * retries with exponential backoff for transient HTTP / network errors
+  * a configurable rate-limit gate so a caller looping over many searches
+    does not hammer Facebook
+  * structured logging so failures are debuggable from logs alone
+
+Public API:
+    search_listings(params: SearchParams) -> SearchPage
+
+If the doc_id rotates and breaks the scraper, recapture from
+`facebook.com/marketplace` Network tab > filter "graphql" and update the
+constants below.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+
+# --- Constants ------------------------------------------------------------
+
+FB_GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
+LISTING_SEARCH_DOC_ID = "7111939778879383"
+FRIENDLY_NAME = "CometMarketplaceSearchContentContainerQuery"
+
+DEFAULT_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Origin": "https://www.facebook.com",
+    "Referer": "https://www.facebook.com/marketplace/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "X-FB-Friendly-Name": FRIENDLY_NAME,
+}
+
+
+# --- Public dataclasses ---------------------------------------------------
+
+@dataclass(frozen=True)
+class SearchParams:
+    """Inputs to one search request."""
+    keyword: str
+    lat: float
+    lng: float
+    radius_km: int = 40
+    price_min: int | None = None
+    price_max: int | None = None
+    last_24h_only: bool = False
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class SearchListing:
+    """Slim listing card returned by the search endpoint.
+
+    Description and seller info are NOT in the search response — fetch
+    them via `facebook_detail.fetch_detail(id)` per new listing.
+    """
+    id: str
+    title: str
+    price_amount: float | None      # parsed from formatted_amount
+    price_formatted: str | None
+    previous_price: str | None
+    is_pending: bool
+    photo_url: str | None
+    seller_location: str | None
+    listing_url: str
+
+
+@dataclass
+class SearchPage:
+    """One page of search results."""
+    listings: list[SearchListing] = field(default_factory=list)
+    end_cursor: str | None = None
+    has_more: bool = False
+
+
+# --- Rate limiter ---------------------------------------------------------
+
+class _RateGate:
+    """Simple sleep-based rate gate. Thread-safe; cheap enough for the
+    pipeline's modest QPS."""
+    def __init__(self, min_interval_s: float):
+        self._min = min_interval_s
+        self._last = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        if self._min <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            wait = self._last + self._min - now
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.monotonic()
+
+
+# Default: at most 1 search per 2 seconds. Override per-instance via
+# `FacebookSearchClient(rate_interval_s=...)`.
+_DEFAULT_SEARCH_INTERVAL_S = 2.0
+
+
+# --- Client ---------------------------------------------------------------
+
+class FacebookSearchClient:
+    """Reusable search client. Owns its session, rate gate, and retry
+    policy. Construct once per process and call .search() many times."""
+
+    def __init__(
+        self,
+        *,
+        session: requests.Session | None = None,
+        rate_interval_s: float = _DEFAULT_SEARCH_INTERVAL_S,
+        max_retries: int = 3,
+        backoff_base_s: float = 1.0,
+        timeout_s: int = 30,
+        headers: dict[str, str] | None = None,
+    ):
+        self._session = session or requests.Session()
+        self._gate = _RateGate(rate_interval_s)
+        self._max_retries = max_retries
+        self._backoff = backoff_base_s
+        self._timeout = timeout_s
+        self._headers = {**DEFAULT_HEADERS, **(headers or {})}
+
+    # --- public ----------------------------------------------------------
+
+    def search(self, params: SearchParams) -> SearchPage:
+        """Run one search request and return a parsed SearchPage.
+
+        Raises requests.RequestException on terminal network failure
+        (after all retries exhausted) or json.JSONDecodeError on a
+        body we can't parse.
+        """
+        payload = self._build_payload(params)
+        body = self._post_with_retry(payload)
+        return self._parse_page(body)
+
+    # --- internals -------------------------------------------------------
+
+    def _build_payload(self, p: SearchParams) -> dict[str, str]:
+        browse: dict[str, Any] = {
+            "filter_location_latitude": p.lat,
+            "filter_location_longitude": p.lng,
+            "filter_radius_km": p.radius_km,
+            "commerce_search_and_rp_available": True,
+        }
+        if p.price_min is not None:
+            browse["filter_price_lower_bound"] = p.price_min
+        if p.price_max is not None:
+            browse["filter_price_upper_bound"] = p.price_max
+        if p.last_24h_only:
+            browse["commerce_search_and_rp_ctime_days"] = "19062;19061"
+
+        variables: dict[str, Any] = {
+            "params": {
+                "bqf": {
+                    "callsite": "COMMERCE_MKTPLACE_WWW",
+                    "query": p.keyword,
+                },
+                "browse_request_params": browse,
+                "custom_request_params": {"surface": "SEARCH"},
+            },
+            "count": 24,
+        }
+        if p.cursor:
+            variables["cursor"] = p.cursor
+
+        return {
+            "doc_id": LISTING_SEARCH_DOC_ID,
+            "variables": json.dumps(variables, separators=(",", ":")),
+        }
+
+    def _post_with_retry(self, payload: dict[str, str]) -> dict[str, Any]:
+        last_exc: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            self._gate.wait()
+            try:
+                resp = self._session.post(
+                    FB_GRAPHQL_URL,
+                    headers=self._headers,
+                    data=payload,
+                    timeout=self._timeout,
+                )
+            except requests.RequestException as e:
+                last_exc = e
+                logger.warning(
+                    "fb-search network error attempt=%d/%d: %s",
+                    attempt + 1, self._max_retries + 1, e,
+                )
+                self._sleep_backoff(attempt)
+                continue
+
+            # 5xx: retry. 4xx: surface immediately.
+            if 500 <= resp.status_code < 600:
+                last_exc = requests.HTTPError(
+                    f"{resp.status_code} from FB GraphQL", response=resp,
+                )
+                logger.warning(
+                    "fb-search 5xx attempt=%d/%d: %s",
+                    attempt + 1, self._max_retries + 1, resp.status_code,
+                )
+                self._sleep_backoff(attempt)
+                continue
+            if resp.status_code >= 400:
+                logger.error(
+                    "fb-search HTTP %d body=%s",
+                    resp.status_code, resp.text[:300],
+                )
+                resp.raise_for_status()
+
+            # Success: parse and return
+            return _decode_fb_json(resp.text)
+
+        # Exhausted retries.
+        assert last_exc is not None
+        raise last_exc
+
+    def _sleep_backoff(self, attempt: int) -> None:
+        delay = self._backoff * (2 ** attempt)
+        time.sleep(delay)
+
+    def _parse_page(self, body: dict[str, Any]) -> SearchPage:
+        if "errors" in body:
+            logger.warning(
+                "fb-search GraphQL errors: %s",
+                json.dumps(body["errors"])[:500],
+            )
+
+        edges, end_cursor = _walk_search_edges(body)
+
+        listings: list[SearchListing] = []
+        for edge in edges:
+            node = edge.get("node") if isinstance(edge, dict) else edge
+            sl = _node_to_listing(node)
+            if sl is not None:
+                listings.append(sl)
+
+        return SearchPage(
+            listings=listings,
+            end_cursor=end_cursor,
+            has_more=bool(end_cursor),
+        )
+
+
+# --- Module-level helpers -------------------------------------------------
+
+def _decode_fb_json(text: str) -> dict[str, Any]:
+    """Strip FB's anti-hijack prefix and decode. Falls back to NDJSON line
+    parsing if the body isn't a single JSON object."""
+    if text.startswith("for (;;);"):
+        text = text[len("for (;;);"):]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+        raise
+
+
+def _walk_search_edges(body: dict) -> tuple[list[dict], str | None]:
+    """Pull listing edges + end_cursor from the response. Resilient to
+    shape drift via a deep-scan fallback."""
+    edges: list[dict] = []
+    end_cursor: str | None = None
+
+    container = _safe_get(body, "data", "marketplace_search", "feed_units")
+    if isinstance(container, dict):
+        raw_edges = container.get("edges")
+        if isinstance(raw_edges, list):
+            edges = raw_edges
+        end_cursor = _safe_get(container, "page_info", "end_cursor")
+
+    if not edges:
+        edges = _deep_find_listings(body)
+
+    return edges, end_cursor
+
+
+def _deep_find_listings(obj: Any) -> list[dict]:
+    """Recursively find any dict with marketplace_listing_title."""
+    out: list[dict] = []
+
+    def walk(x: Any) -> None:
+        if isinstance(x, dict):
+            if "marketplace_listing_title" in x:
+                out.append({"node": x})
+                return
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(obj)
+    return out
+
+
+_PRICE_NUM_RE = re.compile(r"(\d+(?:[\d,]*\d)?(?:\.\d+)?)")
+
+
+def _parse_price_amount(formatted: str | None) -> float | None:
+    """Pull a numeric value out of e.g. 'CA$260' or '$1,200.00'."""
+    if not formatted:
+        return None
+    m = _PRICE_NUM_RE.search(formatted.replace(",", ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def _node_to_listing(node: Any) -> SearchListing | None:
+    if not isinstance(node, dict):
+        return None
+    listing = node.get("listing") if isinstance(node.get("listing"), dict) else node
+    title = listing.get("marketplace_listing_title")
+    listing_id = (
+        listing.get("id")
+        or listing.get("legacy_id")
+        or listing.get("ent_id")
+    )
+    if not title or not listing_id:
+        return None
+
+    formatted = _safe_get(listing, "listing_price", "formatted_amount")
+    return SearchListing(
+        id=str(listing_id),
+        title=title,
+        price_amount=_parse_price_amount(formatted),
+        price_formatted=formatted,
+        previous_price=_safe_get(listing, "strikethrough_price", "formatted_amount"),
+        is_pending=bool(listing.get("is_pending") or listing.get("is_sold")),
+        photo_url=_safe_get(listing, "primary_listing_photo", "image", "uri"),
+        seller_location=(
+            _safe_get(listing, "location", "reverse_geocode", "city_page", "display_name")
+            or _safe_get(listing, "location_text", "text")
+            or _safe_get(listing, "location", "reverse_geocode", "city")
+        ),
+        listing_url=f"https://www.facebook.com/marketplace/item/{listing_id}/",
+    )
+
+
+def _safe_get(d: Any, *keys: str, default: Any = None) -> Any:
+    cur = d
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return cur if cur is not None else default
+
+
+# --- Convenience API ------------------------------------------------------
+
+_DEFAULT_CLIENT: FacebookSearchClient | None = None
+
+
+def get_default_client() -> FacebookSearchClient:
+    """Singleton client for callers that don't need custom config."""
+    global _DEFAULT_CLIENT
+    if _DEFAULT_CLIENT is None:
+        _DEFAULT_CLIENT = FacebookSearchClient()
+    return _DEFAULT_CLIENT
+
+
+def search_listings(params: SearchParams) -> SearchPage:
+    """One-call convenience wrapper around the default client."""
+    return get_default_client().search(params)

@@ -1,0 +1,9 @@
+# One regex per line. Matched (case-insensitive) against title + " " + description.
+# Lines starting with # and blank lines are ignored.
+\btrades?\b
+\bswap\b
+\bISO\b
+\blooking for\b
+\bwanted\b
+\bwill trade\b
+\bpartial trade\b

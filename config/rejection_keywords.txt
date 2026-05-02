@@ -1,0 +1,10 @@
+# One keyword per line. Substring match (case-insensitive) against title only.
+# Lines starting with # and blank lines are ignored.
+# Note: "free" is intentionally absent — free listings are scored normally
+# (handled by the price extraction layer).
+curb alert
+lot
+bundle
+parts only
+for parts
+not working

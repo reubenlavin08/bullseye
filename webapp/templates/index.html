@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>deal_finder · scraper test</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="site-header">
+        <div class="container">
+            <span class="brand">deal_finder</span>
+            <span class="subtitle">scraper test ui · phase 1–3</span>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="search-panel">
+            <form action="/search" method="post" class="search-form">
+                <div class="field field-wide">
+                    <label for="keyword">Search keyword</label>
+                    <input type="text" id="keyword" name="keyword"
+                           value="{{ defaults.keyword }}"
+                           placeholder="e.g. electric scooter, iphone 14, snowboard"
+                           autofocus required>
+                </div>
+
+                <details class="advanced">
+                    <summary>Location &amp; filters</summary>
+                    <div class="filter-grid">
+                        <div class="field">
+                            <label for="lat">Latitude</label>
+                            <input type="text" id="lat" name="lat" value="{{ defaults.lat }}">
+                        </div>
+                        <div class="field">
+                            <label for="lng">Longitude</label>
+                            <input type="text" id="lng" name="lng" value="{{ defaults.lng }}">
+                        </div>
+                        <div class="field">
+                            <label for="radius_km">Radius (km)</label>
+                            <input type="number" id="radius_km" name="radius_km"
+                                   value="{{ defaults.radius_km }}" min="1" max="500">
+                        </div>
+                        <div class="field">
+                            <label for="price_min">Min price</label>
+                            <input type="number" id="price_min" name="price_min"
+                                   value="{{ defaults.price_min }}" min="0">
+                        </div>
+                        <div class="field">
+                            <label for="price_max">Max price</label>
+                            <input type="number" id="price_max" name="price_max"
+                                   value="{{ defaults.price_max }}" min="0">
+                        </div>
+                    </div>
+                </details>
+
+                <button type="submit" class="search-btn">Search</button>
+            </form>
+
+            {% if error %}
+                <div class="error-banner">{{ error }}</div>
+            {% endif %}
+        </section>
+
+        {% if meta %}
+            <section class="meta-bar">
+                <span><strong>{{ meta.count }}</strong> listings for
+                    "<em>{{ meta.keyword }}</em>"</span>
+                <span class="dot"></span>
+                <span>{{ meta.elapsed_ms }} ms</span>
+                <span class="dot"></span>
+                <span>{{ meta.rejected_count }} would be rejected</span>
+                {% if meta.has_more %}
+                    <span class="dot"></span>
+                    <span class="muted">more pages available (not loaded)</span>
+                {% endif %}
+            </section>
+        {% endif %}
+
+        {% if results is not none %}
+            {% if results|length == 0 %}
+                <div class="empty">
+                    No listings returned. Either the search has no results, or
+                    the FB endpoint is having a moment. Try a different keyword.
+                </div>
+            {% else %}
+                <section class="grid">
+                    {% for r in results %}
+                        <article class="card {% if r.rejected %}card-rejected{% endif %}"
+                                 data-listing-id="{{ r.id }}"
+                                 data-listing-title="{{ r.title }}"
+                                 data-raw-price="{{ r.raw_price_numeric }}">
+                            {% if r.photo_url %}
+                                <a href="{{ r.listing_url }}" target="_blank" rel="noopener">
+                                    <img src="{{ r.photo_url }}" alt="{{ r.title }}"
+                                         loading="lazy" class="card-photo">
+                                </a>
+                            {% else %}
+                                <div class="card-photo card-photo-empty">no photo</div>
+                            {% endif %}
+
+                            <div class="card-body">
+                                <div class="card-price">{{ r.price_formatted or '—' }}</div>
+                                <h3 class="card-title">
+                                    <a href="{{ r.listing_url }}" target="_blank" rel="noopener">
+                                        {{ r.title }}
+                                    </a>
+                                </h3>
+                                <div class="card-meta">
+                                    <span>{{ r.seller_location or 'unknown' }}</span>
+                                    {% if r.is_pending %}
+                                        <span class="tag tag-pending">pending</span>
+                                    {% endif %}
+                                    {% if r.previous_price %}
+                                        <span class="tag tag-markdown">was {{ r.previous_price }}</span>
+                                    {% endif %}
+                                </div>
+
+                                {% if r.rejected %}
+                                    <div class="pipeline-flag flag-reject">
+                                        rejected · {{ r.rejection_reason }}
+                                    </div>
+                                {% endif %}
+                                {% if r.price_extracted %}
+                                    <div class="pipeline-flag flag-extract">
+                                        price extracted: ${{ r.resolved_price }}
+                                        (was ${{ r.raw_price_numeric }})
+                                    </div>
+                                {% endif %}
+
+                                {% if r.deal_score is not none %}
+                                    <div class="appraisal-display
+                                                {% if r.deal_score >= 70 %}score-high
+                                                {% elif r.deal_score >= 50 %}score-mid
+                                                {% else %}score-low{% endif %}">
+                                        <div class="score-row">
+                                            <span class="score-num">{{ r.deal_score }}</span>
+                                            <span class="score-label">deal score</span>
+                                            {% if r.fair_value %}
+                                                <span class="score-fair">fair: ${{ '%.0f'|format(r.fair_value) }}</span>
+                                            {% endif %}
+                                        </div>
+                                        {% if r.appraisal_note %}
+                                            <div class="score-note">{{ r.appraisal_note }}</div>
+                                        {% endif %}
+                                        {% if r.comp_sample_size is not none %}
+                                            <div class="score-comps muted">
+                                                {{ r.comp_sample_size }} comp(s)
+                                                {% if r.comp_median %}
+                                                    · median ${{ '%.0f'|format(r.comp_median) }}
+                                                {% endif %}
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
+
+                                <div class="card-actions">
+                                    <button class="fetch-detail-btn" type="button">
+                                        Load description
+                                    </button>
+                                    <button class="appraise-btn" type="button">
+                                        {% if r.deal_score is not none %}Re-appraise{% else %}Appraise{% endif %}
+                                    </button>
+                                </div>
+                                <div class="detail-pane" hidden>
+                                    <div class="detail-spinner" hidden>fetching…</div>
+                                    <div class="detail-text"></div>
+                                    <div class="detail-source muted"></div>
+                                    <div class="detail-pipeline"></div>
+                                </div>
+                                <div class="appraise-pane" hidden>
+                                    <div class="appraise-spinner" hidden>scoring with LLM (~20-30s)…</div>
+                                    <div class="appraise-result"></div>
+                                </div>
+                            </div>
+                        </article>
+                    {% endfor %}
+                </section>
+            {% endif %}
+        {% endif %}
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
