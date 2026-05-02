@@ -435,6 +435,54 @@ a:hover { color: var(--accent); }
     padding-top: 2px;
 }
 
+/* ---------- Confidence indicator ---------- */
+
+.confidence-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(120, 120, 130, 0.06);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    cursor: help;
+}
+
+.conf-dots {
+    display: inline-flex;
+    gap: 3px;
+}
+
+.conf-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--border-strong);
+    transition: background 120ms ease;
+}
+
+.conf-high  .conf-dot.lit { background: var(--good); }
+.conf-medium .conf-dot.lit { background: var(--warn); }
+.conf-low   .conf-dot.lit { background: var(--fg-dim); }
+
+.conf-label {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+}
+
+.conf-high  .conf-label { color: var(--good); }
+.conf-medium .conf-label { color: var(--warn); }
+.conf-low   .conf-label { color: var(--fg-muted); }
+
+.conf-detail {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 10px;
+}
+
 .math-eq strong {
     color: var(--fg);
     font-weight: 700;

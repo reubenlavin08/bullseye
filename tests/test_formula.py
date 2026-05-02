@@ -65,11 +65,13 @@ def test_iphone_11_overpriced_case_now_scores_low():
 
 # --- Score curve sanity --------------------------------------------------
 
-def test_curve_unicorn_deal_scores_100():
-    # asking $80, fair $200 → ratio 0.4
-    comp = _comp(n=10, median=250.0, trimmed_median=250.0)  # fair=200
+def test_curve_unicorn_deal_scores_100_with_high_confidence():
+    # asking $80, fair $200 → ratio 0.4. Need n>=12 with tight IQR
+    # for confidence to be "high" (±5), which keeps cap at 95.
+    comp = _comp(n=15, median=250.0, trimmed_median=250.0, iqr=20.0)
     s = compute_score(asking_price=80.0, comp=comp)
-    assert s.deal_score == 100
+    assert s.deal_score >= 95
+    assert s.confidence_label == "high"
 
 
 def test_curve_neutral_at_one_to_one():
@@ -178,3 +180,36 @@ def test_llm_fallback_is_low_confidence():
     comp = _comp(n=2)
     s = compute_score(asking_price=150.0, comp=comp, fair_value_from_llm=170.0)
     assert s.confidence_label == "low"
+
+
+# --- Confidence cap on the score ----------------------------------------
+
+def test_score_capped_by_confidence_on_niche_item():
+    """The 'GE AC motor' case: $15 asking, $38 fair, ratio 0.39 — raw
+    curve says 100. But with only 3 comps (low confidence, ±18) the
+    cap is 100 - 18 = 82. Score should be 82, not 100."""
+    comp = _comp(n=3, median=47.5, trimmed_median=47.5, iqr=20.0)
+    s = compute_score(asking_price=15.0, comp=comp, fair_value_from_llm=38.0)
+    assert s.confidence_label == "low"
+    assert s.deal_score <= 100 - s.confidence_pm
+    assert s.deal_score >= 70  # still recognized as a good deal
+
+
+def test_high_confidence_does_not_cap_legitimate_unicorns():
+    """Plenty of tight comps + truly amazing ratio should still score 100."""
+    comp = _comp(n=14, median=400.0, trimmed_median=400.0, iqr=40.0)
+    s = compute_score(asking_price=120.0, comp=comp)
+    # ratio 0.375 -> raw score 100; high confidence -> ±5 cap is 95.
+    # That's still capped, but only slightly.
+    assert s.deal_score >= 95
+    assert s.confidence_label == "high"
+
+
+def test_cap_does_not_inflate_low_scores():
+    """Cap only applies when raw_score > confidence_cap. A score of
+    30 stays 30 even with low confidence."""
+    comp = _comp(n=3, median=200.0, trimmed_median=200.0, iqr=80.0)
+    s = compute_score(asking_price=300.0, comp=comp, fair_value_from_llm=200.0)
+    # asking $300 / fair $200 = ratio 1.5 -> raw_score ~15
+    # cap is 100 - 18 = 82. min(15, 82) = 15.
+    assert s.deal_score < 30

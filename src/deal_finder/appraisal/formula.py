@@ -116,9 +116,20 @@ def compute_score(
 
     ratio = asking_price / fair_value
     raw_score = _curve(ratio, SCORE_CURVE)
-    deal_score = max(0, min(100, int(round(raw_score))))
 
     confidence_pm, confidence_label = _confidence(comp, source)
+
+    # Cap the score by confidence — we can never claim a deal score
+    # higher than `100 - confidence_pm` because that's the upper bound
+    # of the confidence interval. Saying "100 ±18" implies the real
+    # score could be as low as 82, so we report 82 instead. This is
+    # how statisticians report uncertain estimates: stay inside the
+    # interval. Keeps the system honest on niche items where comp
+    # sample is thin (a $15 part with ratio 0.4 won't score 100 if
+    # we only had 3 comps to work from).
+    confidence_cap = 100 - confidence_pm
+    capped = min(raw_score, confidence_cap)
+    deal_score = max(0, min(100, int(round(capped))))
 
     return ScoreBreakdown(
         asking_price=asking_price,

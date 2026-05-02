@@ -358,6 +358,7 @@ def appraise(listing_id: str):
             search_term=search_term,
             lat=49.2827, lng=-123.1207, radius_km=1500,
             exclude_listing_id=listing_id,
+            asking_price=pl.resolved_price,
         )
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"comp fetch: {e}"}), 502

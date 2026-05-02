@@ -214,11 +214,15 @@ def _process_one(
     search_term = normalize_title(title) or title
     logger.debug("normalize %s: %r -> %r", listing_id, title, search_term)
 
-    # 2. Fetch comps (cache-first; refetches on miss).
+    # 2. Fetch comps (cache-first; refetches on miss). Pass asking
+    #    price so the bimodal-cluster splitter can pick the right
+    #    price tier when comps span multiple categories (the "boat
+    #    motor" problem).
     comp = get_comps(
         search_term=search_term,
         lat=lat, lng=lng, radius_km=radius_km,
         exclude_listing_id=listing_id,
+        asking_price=asking,
     )
 
     # 3. Get LLM fair_value estimate ONLY when comps are too sparse.

@@ -56,8 +56,14 @@ def get_comps(
     exclude_listing_id: str | None = None,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     force_refresh: bool = False,
+    asking_price: float | None = None,
 ) -> CompStats:
     """Get comps for a search term, fetching from FB if cache is stale.
+
+    `asking_price` enables bimodal-cluster filtering: when comps split
+    into a cheap-cluster and expensive-cluster (e.g. "boat motor" hits
+    both trolling motors and outboards), we keep the cluster closest
+    to the asking price. See db.comps._maybe_split_bimodal.
 
     Returns a CompStats with median/mean/etc. Even if the fetch fails
     we return a CompStats (with fresh=False, sample_size=0) so the caller
@@ -66,7 +72,9 @@ def get_comps(
     with get_conn() as conn:
         if not force_refresh:
             cached = fetch_stats(
-                conn, search_term, SOURCE, ttl_seconds=ttl_seconds,
+                conn, search_term, SOURCE,
+                ttl_seconds=ttl_seconds,
+                asking_price=asking_price,
             )
             if cached.fresh and cached.sample_size > 0:
                 logger.debug(
@@ -87,7 +95,9 @@ def get_comps(
             inserted = insert_comps(conn, search_term, SOURCE, obs)
         with conn:
             stats = fetch_stats(
-                conn, search_term, SOURCE, ttl_seconds=ttl_seconds,
+                conn, search_term, SOURCE,
+                ttl_seconds=ttl_seconds,
+                asking_price=asking_price,
             )
 
     logger.info(

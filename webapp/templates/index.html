@@ -147,6 +147,18 @@
                                                 <span class="score-fair">fair: ${{ '%.0f'|format(r.fair_value) }}</span>
                                             {% endif %}
                                         </div>
+                                        {% if bd and bd.confidence_label %}
+                                            <div class="confidence-bar conf-{{ bd.confidence_label }}"
+                                                 title="confidence interval is ±{{ bd.confidence_pm }} on the score; based on sample size of {{ bd.sample_size }} comp(s)">
+                                                <div class="conf-dots">
+                                                    <span class="conf-dot {% if bd.confidence_label in ('high','medium','low') %}lit{% endif %}"></span>
+                                                    <span class="conf-dot {% if bd.confidence_label in ('high','medium') %}lit{% endif %}"></span>
+                                                    <span class="conf-dot {% if bd.confidence_label == 'high' %}lit{% endif %}"></span>
+                                                </div>
+                                                <span class="conf-label">{{ bd.confidence_label }} confidence</span>
+                                                <span class="conf-detail muted">n={{ bd.sample_size }}{% if bd.outliers_dropped %} (−{{ bd.outliers_dropped }} outlier{% if bd.outliers_dropped > 1 %}s{% endif %}){% endif %}</span>
+                                            </div>
+                                        {% endif %}
                                         {% if bd %}
                                             <div class="score-math">
                                                 <span class="math-eq">
@@ -189,7 +201,7 @@
                                     <div class="detail-pipeline"></div>
                                 </div>
                                 <div class="appraise-pane" hidden>
-                                    <div class="appraise-spinner" hidden>scoring with LLM (~20-30s)…</div>
+                                    <div class="appraise-spinner" hidden>scoring (~3-5s, longer for niche items)…</div>
                                     <div class="appraise-result"></div>
                                 </div>
                             </div>
