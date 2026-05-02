@@ -1038,16 +1038,25 @@ def _circuit_breaker_should_skip() -> bool:
 
                 # Did we already probe recently? Don't probe more than
                 # once per PROBE_COOLDOWN_S — wasteful and looks bot-y.
+                # Use ORDER BY ... LIMIT 1 instead of MAX() so we can
+                # also pull `detail->>'result'` from the same row
+                # (mixing an aggregate with a non-aggregate non-grouped
+                # column would be a SQL grouping error).
                 cur.execute(
-                    f"""SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at))),
+                    """SELECT EXTRACT(EPOCH FROM (NOW() - created_at)),
                               detail->>'result'
-                        FROM scheduler_events
-                        WHERE event_type = 'fb_probe'
-                          AND created_at >= NOW() - INTERVAL '{PROBE_COOLDOWN_S} seconds'""",
+                       FROM scheduler_events
+                       WHERE event_type = 'fb_probe'
+                       ORDER BY created_at DESC
+                       LIMIT 1""",
                 )
                 row = cur.fetchone()
-                secs_since_probe, last_probe_result = (row or (None, None))
-    except Exception:  # noqa: BLE001
+                if row and row[0] is not None and row[0] <= PROBE_COOLDOWN_S:
+                    secs_since_probe, last_probe_result = row[0], row[1]
+                else:
+                    secs_since_probe, last_probe_result = None, None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("circuit breaker query failed (fail open): %s", e)
         return False  # fail open
 
     # No recent rate-limits → closed state, proceed normally.
