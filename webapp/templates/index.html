@@ -3,33 +3,73 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>deal_finder · scraper test</title>
+    <title>bullseye · marketplace deal finder</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,700;1,9..144,400;1,9..144,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
     <header class="site-header">
         <div class="container">
-            <span class="brand">deal_finder</span>
-            <span class="subtitle">scraper test ui · phase 1–3</span>
+            <div class="brand-block">
+                <span class="brand">bullseye</span>
+                <span class="subtitle">statistical marketplace appraisal</span>
+            </div>
+            <nav class="header-nav">
+                <a href="#search">Search</a>
+                <a href="#listings">Listings</a>
+                <a href="#subscribe">Subscribe</a>
+            </nav>
         </div>
     </header>
 
+    <section class="hero" id="search">
+        <div class="container">
+            <div class="section-eyebrow">find better deals, faster</div>
+            <h1>Score every Marketplace listing against <em>real market data</em>.</h1>
+            <p class="hero-sub">
+                Type a keyword, get a percentile-ranked score for every listing nearby.
+                The math is deterministic. The comps are visible. No vibes.
+            </p>
+        </div>
+    </section>
+
+    <div class="marquee-strip">
+        <div class="marquee-track">
+            <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
+            <span class="marquee-item">real comp data<span class="sep">·</span></span>
+            <span class="marquee-item">percentile ranks<span class="sep">·</span></span>
+            <span class="marquee-item">no vibes<span class="sep">·</span></span>
+            <span class="marquee-item">local-first<span class="sep">·</span></span>
+            <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
+            <span class="marquee-item">real comp data<span class="sep">·</span></span>
+            <span class="marquee-item">percentile ranks<span class="sep">·</span></span>
+            <span class="marquee-item">no vibes<span class="sep">·</span></span>
+            <span class="marquee-item">local-first<span class="sep">·</span></span>
+        </div>
+    </div>
+
     <main class="container">
-        <section class="search-panel">
+        <section class="section search-panel reveal" id="search-form">
+            <div class="section-head">
+                <div>
+                    <div class="section-eyebrow">step one</div>
+                    <h2>Search the live market.</h2>
+                </div>
+            </div>
+
             <form action="/search" method="post" class="search-form">
                 <div class="field field-wide">
-                    <label for="keyword">Search keyword</label>
+                    <label for="keyword">Keyword</label>
                     <input type="text" id="keyword" name="keyword"
                            value="{{ defaults.keyword }}"
-                           placeholder="e.g. electric scooter, iphone 14, snowboard"
+                           placeholder="electric scooter, iphone 14, snowboard…"
                            autofocus required>
                 </div>
 
                 <details class="advanced">
-                    <summary>Location &amp; filters</summary>
+                    <summary>Location &amp; price filters</summary>
                     <div class="filter-grid">
                         <div class="field">
                             <label for="lat">Latitude</label>
@@ -57,7 +97,7 @@
                     </div>
                 </details>
 
-                <button type="submit" class="search-btn">Search</button>
+                <button type="submit" class="btn btn-accent">Search</button>
             </form>
 
             {% if error %}
@@ -66,9 +106,8 @@
         </section>
 
         {% if meta %}
-            <section class="meta-bar">
-                <span><strong>{{ meta.count }}</strong> listings for
-                    "<em>{{ meta.keyword }}</em>"</span>
+            <section class="meta-bar reveal">
+                <span><strong>{{ meta.count }}</strong> listings for "<em>{{ meta.keyword }}</em>"</span>
                 <span class="dot"></span>
                 <span>{{ meta.elapsed_ms }} ms</span>
                 <span class="dot"></span>
@@ -81,179 +120,233 @@
         {% endif %}
 
         {% if results is not none %}
-            {% if results|length == 0 %}
-                <div class="empty">
-                    No listings returned. Either the search has no results, or
-                    the FB endpoint is having a moment. Try a different keyword.
-                </div>
-            {% else %}
-                <section class="grid">
-                    {% for r in results %}
-                        <article class="card {% if r.rejected %}card-rejected{% endif %}"
-                                 data-listing-id="{{ r.id }}"
-                                 data-listing-title="{{ r.title }}"
-                                 data-raw-price="{{ r.raw_price_numeric }}">
-                            {% if r.photo_url %}
-                                <a href="{{ r.listing_url }}" target="_blank" rel="noopener">
-                                    <img src="{{ r.photo_url }}" alt="{{ r.title }}"
-                                         loading="lazy" class="card-photo">
-                                </a>
-                            {% else %}
-                                <div class="card-photo card-photo-empty">no photo</div>
-                            {% endif %}
-
-                            <div class="card-body">
-                                <div class="card-price">{{ r.price_formatted or '—' }}</div>
-                                <h3 class="card-title">
+            <section class="section" id="listings">
+                {% if results|length == 0 %}
+                    <div class="empty">
+                        No listings returned for "{{ meta.keyword }}". Try a different keyword
+                        or widen the radius.
+                    </div>
+                {% else %}
+                    <section class="grid">
+                        {% for r in results %}
+                            <article class="card {% if r.rejected %}card-rejected{% endif %}"
+                                     data-listing-id="{{ r.id }}"
+                                     data-listing-title="{{ r.title }}"
+                                     data-raw-price="{{ r.raw_price_numeric }}">
+                                {% if r.photo_url %}
                                     <a href="{{ r.listing_url }}" target="_blank" rel="noopener">
-                                        {{ r.title }}
+                                        <img src="{{ r.photo_url }}" alt="{{ r.title }}"
+                                             loading="lazy" class="card-photo">
                                     </a>
-                                </h3>
-                                <div class="card-meta">
-                                    <span>{{ r.seller_location or 'unknown' }}</span>
-                                    {% if r.is_pending %}
-                                        <span class="tag tag-pending">pending</span>
-                                    {% endif %}
-                                    {% if r.previous_price %}
-                                        <span class="tag tag-markdown">was {{ r.previous_price }}</span>
-                                    {% endif %}
-                                </div>
-
-                                {% if r.rejected %}
-                                    <div class="pipeline-flag flag-reject">
-                                        rejected · {{ r.rejection_reason }}
-                                    </div>
-                                {% endif %}
-                                {% if r.price_extracted %}
-                                    <div class="pipeline-flag flag-extract">
-                                        price extracted: ${{ r.resolved_price }}
-                                        (was ${{ r.raw_price_numeric }})
-                                    </div>
+                                {% else %}
+                                    <div class="card-photo card-photo-empty">no photo</div>
                                 {% endif %}
 
-                                {% set bd = r.appraisal_breakdown %}
-                                {% if bd and bd.unscoreable %}
-                                    <div class="appraisal-display unscoreable-display">
-                                        <div class="unscoreable-headline">
-                                            <span class="unscoreable-icon">∅</span>
-                                            <span class="unscoreable-title">Not enough data to score</span>
-                                        </div>
-                                        <div class="unscoreable-reason">{{ bd.unscoreable_reason }}</div>
-                                        {% if bd.median %}
-                                            <div class="unscoreable-stats muted">
-                                                {{ bd.sample_size }} comp(s) found · median ${{ '%.0f'|format(bd.median) }}{% if bd.iqr %} · IQR ${{ '%.0f'|format(bd.iqr) }}{% endif %}
-                                            </div>
+                                <div class="card-body">
+                                    <div class="card-price">{{ r.price_formatted or '—' }}</div>
+                                    <h3 class="card-title">
+                                        <a href="{{ r.listing_url }}" target="_blank" rel="noopener">
+                                            {{ r.title }}
+                                        </a>
+                                    </h3>
+                                    <div class="card-meta">
+                                        <span>{{ r.seller_location or 'unknown' }}</span>
+                                        {% if r.posted_relative %}
+                                            <span class="dot"></span>
+                                            <span class="posted">{{ r.posted_relative }}</span>
                                         {% endif %}
-                                        {% if r.comp_search_term %}
-                                            <button class="comps-toggle muted"
-                                                    type="button"
-                                                    data-comp-term="{{ r.comp_search_term }}"
-                                                    data-comp-source="{{ r.comp_source or 'marketplace' }}"
-                                                    title="See the comps we did find">
-                                                See {{ bd.sample_size }} comp(s) ▾
-                                            </button>
-                                            <div class="comps-pane" hidden>
-                                                <div class="comps-spinner" hidden>loading…</div>
-                                                <div class="comps-content"></div>
-                                            </div>
+                                        {% if r.is_pending %}
+                                            <span class="tag tag-pending">pending</span>
+                                        {% endif %}
+                                        {% if r.previous_price %}
+                                            <span class="tag tag-markdown">was {{ r.previous_price }}</span>
                                         {% endif %}
                                     </div>
-                                {% elif r.deal_score is not none %}
-                                    <div class="appraisal-display
-                                                {% if bd and bd.data_quality_poor %}score-low
-                                                {% elif r.deal_score >= 70 %}score-high
-                                                {% elif r.deal_score >= 50 %}score-mid
-                                                {% else %}score-low{% endif %}">
-                                        <div class="score-row">
-                                            <span class="score-num">{{ r.deal_score }}</span>
-                                            {% if bd and bd.confidence_pm %}
-                                                <span class="score-pm">±{{ bd.confidence_pm }}</span>
-                                            {% endif %}
-                                            <span class="score-label">deal score</span>
-                                            {% if r.fair_value %}
-                                                <span class="score-fair">fair: ${{ '%.0f'|format(r.fair_value) }}</span>
-                                            {% endif %}
+
+                                    {% if r.rejected %}
+                                        <div class="pipeline-flag flag-reject">
+                                            rejected · {{ r.rejection_reason }}
                                         </div>
-                                        {% if bd and bd.data_quality_poor %}
-                                            <div class="data-warning"
-                                                 title="IQR ${{ '%.0f'|format(bd.iqr or 0) }} exceeds trimmed median ${{ '%.0f'|format(bd.trimmed_median or 0) }}; comp distribution is too dispersed for a single number to be reliable. Consider the percentile rank instead.">
-                                                ⚠ comps too varied — score unreliable
+                                    {% endif %}
+                                    {% if r.price_extracted %}
+                                        <div class="pipeline-flag flag-extract">
+                                            price extracted: ${{ r.resolved_price }}
+                                            (was ${{ r.raw_price_numeric }})
+                                        </div>
+                                    {% endif %}
+
+                                    {% set bd = r.appraisal_breakdown %}
+                                    {% if bd and bd.unscoreable %}
+                                        <div class="appraisal-display unscoreable-display">
+                                            <div class="unscoreable-headline">
+                                                <span class="unscoreable-icon">∅</span>
+                                                <span class="unscoreable-title">Not enough data to score</span>
                                             </div>
-                                        {% endif %}
-                                        {% if bd and bd.percentile_rank is not none %}
-                                            <div class="pct-rank">
-                                                Asking sits at the
-                                                <strong>{{ '%.0f'|format(bd.percentile_rank * 100) }}<sup>th</sup></strong>
-                                                percentile of comps
-                                                <span class="pct-detail muted">
-                                                    (cheaper than {{ '%.0f'|format((1 - bd.percentile_rank) * 100) }}% of similar listings)
-                                                </span>
-                                            </div>
-                                        {% endif %}
-                                        {% if bd and bd.confidence_label %}
-                                            <div class="confidence-bar conf-{{ bd.confidence_label }}"
-                                                 title="confidence interval is ±{{ bd.confidence_pm }} on the score; based on sample size of {{ bd.sample_size }} comp(s)">
-                                                <div class="conf-dots">
-                                                    <span class="conf-dot {% if bd.confidence_label in ('high','medium','low') %}lit{% endif %}"></span>
-                                                    <span class="conf-dot {% if bd.confidence_label in ('high','medium') %}lit{% endif %}"></span>
-                                                    <span class="conf-dot {% if bd.confidence_label == 'high' %}lit{% endif %}"></span>
+                                            <div class="unscoreable-reason">{{ bd.unscoreable_reason }}</div>
+                                            {% if bd.median %}
+                                                <div class="unscoreable-stats muted">
+                                                    {{ bd.sample_size }} comp(s) found · median ${{ '%.0f'|format(bd.median) }}{% if bd.iqr %} · IQR ${{ '%.0f'|format(bd.iqr) }}{% endif %}
                                                 </div>
-                                                <span class="conf-label">{{ bd.confidence_label }} confidence</span>
-                                                <span class="conf-detail muted">n={{ bd.sample_size }}{% if bd.outliers_dropped %} (−{{ bd.outliers_dropped }} outlier{% if bd.outliers_dropped > 1 %}s{% endif %}){% endif %}</span>
+                                            {% endif %}
+                                            {% if r.comp_search_term %}
+                                                <button class="comps-toggle muted"
+                                                        type="button"
+                                                        data-comp-term="{{ r.comp_search_term }}"
+                                                        data-comp-source="{{ r.comp_source or 'marketplace' }}">
+                                                    See {{ bd.sample_size }} comp(s) ▾
+                                                </button>
+                                                <div class="comps-pane" hidden>
+                                                    <div class="comps-spinner" hidden>loading…</div>
+                                                    <div class="comps-content"></div>
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    {% elif r.deal_score is not none %}
+                                        <div class="appraisal-display
+                                                    {% if bd and bd.data_quality_poor %}score-low
+                                                    {% elif r.deal_score >= 70 %}score-high
+                                                    {% elif r.deal_score >= 50 %}score-mid
+                                                    {% else %}score-low{% endif %}">
+                                            <div class="score-row">
+                                                <span class="score-num">{{ r.deal_score }}</span>
+                                                {% if bd and bd.confidence_pm %}
+                                                    <span class="score-pm">±{{ bd.confidence_pm }}</span>
+                                                {% endif %}
+                                                <span class="score-label">deal score</span>
+                                                {% if r.fair_value %}
+                                                    <span class="score-fair">fair: ${{ '%.0f'|format(r.fair_value) }}</span>
+                                                {% endif %}
                                             </div>
-                                        {% endif %}
-                                        {% if bd %}
-                                            <div class="score-math">
-                                                <span class="math-eq">
-                                                    ${{ '%.0f'|format(bd.asking_price) }} ÷ ${{ '%.0f'|format(bd.fair_value) }} = ratio <strong>{{ '%.2f'|format(bd.ratio) }}</strong>
-                                                </span>
-                                                <span class="math-source muted">{{ bd.fair_value_source }}</span>
-                                            </div>
-                                        {% endif %}
-                                        {% if r.appraisal_note %}
-                                            <div class="score-note">{{ r.appraisal_note }}</div>
-                                        {% endif %}
-                                        {% if r.comp_sample_size is not none %}
-                                            <button class="comps-toggle muted"
-                                                    type="button"
-                                                    data-comp-term="{{ r.comp_search_term or '' }}"
-                                                    data-comp-source="{{ r.comp_source or 'marketplace' }}"
-                                                    title="See the listings this median is based on">
-                                                {{ r.comp_sample_size }} comp(s){% if bd and bd.outliers_dropped %}, {{ bd.outliers_dropped }} outlier(s) dropped{% endif %}{% if r.comp_median %} · raw median ${{ '%.0f'|format(r.comp_median) }}{% endif %} ▾
-                                            </button>
-                                            <div class="comps-pane" hidden>
-                                                <div class="comps-spinner" hidden>loading…</div>
-                                                <div class="comps-content"></div>
-                                            </div>
-                                        {% endif %}
-                                    </div>
-                                {% endif %}
+                                            {% if bd and bd.data_quality_poor %}
+                                                <div class="data-warning"
+                                                     title="IQR ${{ '%.0f'|format(bd.iqr or 0) }} exceeds trimmed median ${{ '%.0f'|format(bd.trimmed_median or 0) }}; data is too dispersed for a single number.">
+                                                    ⚠ comps too varied — score unreliable
+                                                </div>
+                                            {% endif %}
+                                            {% if bd and bd.percentile_rank is not none %}
+                                                <div class="pct-rank">
+                                                    Asking sits at the
+                                                    <strong>{{ '%.0f'|format(bd.percentile_rank * 100) }}<sup>th</sup></strong>
+                                                    percentile of comps
+                                                    <span class="pct-detail muted">
+                                                        (cheaper than {{ '%.0f'|format((1 - bd.percentile_rank) * 100) }}% of similar listings)
+                                                    </span>
+                                                </div>
+                                            {% endif %}
+                                            {% if bd and bd.confidence_label %}
+                                                <div class="confidence-bar conf-{{ bd.confidence_label }}"
+                                                     title="confidence interval ±{{ bd.confidence_pm }}; based on n={{ bd.sample_size }} comp(s)">
+                                                    <div class="conf-dots">
+                                                        <span class="conf-dot {% if bd.confidence_label in ('high','medium','low') %}lit{% endif %}"></span>
+                                                        <span class="conf-dot {% if bd.confidence_label in ('high','medium') %}lit{% endif %}"></span>
+                                                        <span class="conf-dot {% if bd.confidence_label == 'high' %}lit{% endif %}"></span>
+                                                    </div>
+                                                    <span class="conf-label">{{ bd.confidence_label }} confidence</span>
+                                                    <span class="conf-detail muted">n={{ bd.sample_size }}{% if bd.outliers_dropped %} (−{{ bd.outliers_dropped }}){% endif %}</span>
+                                                </div>
+                                            {% endif %}
+                                            {% if bd %}
+                                                <div class="score-math">
+                                                    <span class="math-eq">
+                                                        ${{ '%.0f'|format(bd.asking_price) }} ÷ ${{ '%.0f'|format(bd.fair_value) }} = ratio <strong>{{ '%.2f'|format(bd.ratio) }}</strong>
+                                                    </span>
+                                                    <span class="math-source muted">{{ bd.fair_value_source }}</span>
+                                                </div>
+                                            {% endif %}
+                                            {% if r.appraisal_note %}
+                                                <div class="score-note">{{ r.appraisal_note }}</div>
+                                            {% endif %}
+                                            {% if r.comp_sample_size is not none %}
+                                                <button class="comps-toggle muted"
+                                                        type="button"
+                                                        data-comp-term="{{ r.comp_search_term or '' }}"
+                                                        data-comp-source="{{ r.comp_source or 'marketplace' }}"
+                                                        title="See the listings this median is based on">
+                                                    {{ r.comp_sample_size }} comp(s){% if bd and bd.outliers_dropped %}, {{ bd.outliers_dropped }} outlier(s) dropped{% endif %}{% if r.comp_median %} · raw median ${{ '%.0f'|format(r.comp_median) }}{% endif %} ▾
+                                                </button>
+                                                <div class="comps-pane" hidden>
+                                                    <div class="comps-spinner" hidden>loading…</div>
+                                                    <div class="comps-content"></div>
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    {% endif %}
 
-                                <div class="card-actions">
-                                    <button class="fetch-detail-btn" type="button">
-                                        Load description
-                                    </button>
-                                    <button class="appraise-btn" type="button">
-                                        {% if r.deal_score is not none %}Re-appraise{% else %}Appraise{% endif %}
-                                    </button>
+                                    <div class="card-actions">
+                                        <button class="fetch-detail-btn" type="button">Description</button>
+                                        <button class="appraise-btn" type="button">
+                                            {% if r.deal_score is not none %}Re-appraise{% else %}Appraise{% endif %}
+                                        </button>
+                                    </div>
+                                    <div class="detail-pane" hidden>
+                                        <div class="detail-spinner" hidden>fetching…</div>
+                                        <div class="detail-text"></div>
+                                        <div class="detail-source muted"></div>
+                                        <div class="detail-pipeline"></div>
+                                    </div>
+                                    <div class="appraise-pane" hidden>
+                                        <div class="appraise-spinner" hidden>scoring (~3-5s, longer for niche items)…</div>
+                                        <div class="appraise-result"></div>
+                                    </div>
                                 </div>
-                                <div class="detail-pane" hidden>
-                                    <div class="detail-spinner" hidden>fetching…</div>
-                                    <div class="detail-text"></div>
-                                    <div class="detail-source muted"></div>
-                                    <div class="detail-pipeline"></div>
-                                </div>
-                                <div class="appraise-pane" hidden>
-                                    <div class="appraise-spinner" hidden>scoring (~3-5s, longer for niche items)…</div>
-                                    <div class="appraise-result"></div>
-                                </div>
-                            </div>
-                        </article>
-                    {% endfor %}
-                </section>
-            {% endif %}
+                            </article>
+                        {% endfor %}
+                    </section>
+                {% endif %}
+            </section>
         {% endif %}
     </main>
+
+    <section class="subscribe-section reveal" id="subscribe">
+        <div class="container">
+            <div class="section-head">
+                <div>
+                    <div class="section-eyebrow">notifications</div>
+                    <h2>Get pinged when a saved search has a real deal.</h2>
+                </div>
+            </div>
+
+            <p class="hero-sub" style="margin-bottom: 28px;">
+                Pick a saved search, set a score threshold, leave your email. We email you the moment a listing scores above your bar — typically within 1–2 minutes of it being posted.
+            </p>
+
+            <form id="subscribe-form" class="subscribe-form">
+                <div class="field">
+                    <label for="sub-name">Name (optional)</label>
+                    <input type="text" id="sub-name" name="name" placeholder="Reuben">
+                </div>
+                <div class="field">
+                    <label for="sub-email">Email</label>
+                    <input type="email" id="sub-email" name="email" required
+                           placeholder="you@example.com">
+                </div>
+                <div class="field">
+                    <label for="sub-search">Saved search</label>
+                    <select id="sub-search" name="search_id" required>
+                        <option value="">— loading —</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="sub-threshold">Score threshold</label>
+                    <input type="number" id="sub-threshold" name="score_threshold"
+                           value="70" min="0" max="100">
+                </div>
+                <div class="field field-full">
+                    <button type="submit" class="btn">Notify me</button>
+                </div>
+            </form>
+
+            <div id="subscribe-banner" class="subscribe-banner" hidden></div>
+        </div>
+    </section>
+
+    <footer class="site-footer">
+        <div class="container">
+            <span class="brand">bullseye</span>
+            <span class="muted">deterministic marketplace appraisal · local-first · open source</span>
+            <a href="https://github.com/reubenlavin08/bullseye" target="_blank" rel="noopener">GitHub</a>
+        </div>
+    </footer>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

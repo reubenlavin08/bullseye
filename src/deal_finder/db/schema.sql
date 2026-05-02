@@ -116,3 +116,22 @@ CREATE TABLE IF NOT EXISTS comps_meta (
     sample_size     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (search_term, source)
 );
+
+-- ---------------------------------------------------------------------
+-- subscribers — people who want to be notified about high-score deals
+--   for a given saved search. Email is required; phone is optional
+--   (could carry SMS later). One row per (email, search_id).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS subscribers (
+    id                  SERIAL PRIMARY KEY,
+    name                TEXT,
+    email               TEXT NOT NULL,
+    phone               TEXT,
+    search_id           INTEGER REFERENCES user_searches(id) ON DELETE CASCADE,
+    score_threshold     INTEGER NOT NULL DEFAULT 70,
+    confirmed           BOOLEAN NOT NULL DEFAULT FALSE,  -- email-verify hook for later
+    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (email, search_id)
+);
+CREATE INDEX IF NOT EXISTS idx_subscribers_search ON subscribers(search_id);

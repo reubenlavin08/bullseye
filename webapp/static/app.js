@@ -365,9 +365,88 @@
         return e;
     }
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init);
-    } else {
+    // Scroll-triggered fade-up reveal — Intersection Observer over
+    // every .card and .reveal block. Adds .in-view when the element
+    // crosses ~85% into the viewport. Idempotent — re-runs harmlessly.
+    function setupReveal() {
+        const els = document.querySelectorAll(".card, .reveal");
+        if (!("IntersectionObserver" in window) || els.length === 0) {
+            els.forEach((el) => el.classList.add("in-view"));
+            return;
+        }
+        const obs = new IntersectionObserver((entries) => {
+            entries.forEach((e, i) => {
+                if (e.isIntersecting) {
+                    // Tiny stagger for grouped cards, capped so it
+                    // doesn't drag forever on dense grids.
+                    const delay = Math.min(i * 60, 240);
+                    setTimeout(() => e.target.classList.add("in-view"), delay);
+                    obs.unobserve(e.target);
+                }
+            });
+        }, { threshold: 0.12, rootMargin: "0px 0px -80px 0px" });
+        els.forEach((el) => obs.observe(el));
+    }
+
+    // Subscribe form: load active searches into the dropdown, handle submit.
+    async function setupSubscribeForm() {
+        const form = document.getElementById("subscribe-form");
+        if (!form) return;
+        const select = form.querySelector("#sub-search");
+        const banner = document.getElementById("subscribe-banner");
+
+        try {
+            const res = await fetch("/api/searches");
+            const data = await res.json();
+            const opts = (data.searches || []).map(
+                (s) => '<option value="' + s.id + '">' +
+                       escapeHtml(s.keyword) + ' (' + s.radius_km + ' km)</option>'
+            ).join("");
+            select.innerHTML = opts || '<option value="">no saved searches yet</option>';
+        } catch (err) {
+            select.innerHTML = '<option value="">could not load searches</option>';
+        }
+
+        form.addEventListener("submit", async (ev) => {
+            ev.preventDefault();
+            banner.hidden = true;
+            banner.classList.remove("is-error");
+            const fd = new FormData(form);
+            try {
+                const res = await fetch("/api/subscribe", {
+                    method: "POST",
+                    body: fd,
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    banner.textContent = data.message ||
+                        "Subscribed. We'll email you when a listing scores above your threshold.";
+                    banner.hidden = false;
+                    form.reset();
+                    // Reload search options so the dropdown defaults are fresh.
+                    setupSubscribeForm();
+                } else {
+                    banner.textContent = "Couldn't subscribe: " + (data.error || "unknown error");
+                    banner.classList.add("is-error");
+                    banner.hidden = false;
+                }
+            } catch (err) {
+                banner.textContent = "Network error: " + err.message;
+                banner.classList.add("is-error");
+                banner.hidden = false;
+            }
+        });
+    }
+
+    function bootAll() {
         init();
+        setupReveal();
+        setupSubscribeForm();
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", bootAll);
+    } else {
+        bootAll();
     }
 })();

@@ -78,7 +78,7 @@ def _enrich_listing(sl) -> dict:
     base["rejected"] = rj.rejected
     base["rejection_reason"] = rj.reason
 
-    # Pull any existing appraisal for this listing from Postgres.
+    # Pull any existing appraisal + posting metadata from Postgres.
     base["deal_score"] = None
     base["fair_value"] = None
     base["appraisal_note"] = None
@@ -87,6 +87,9 @@ def _enrich_listing(sl) -> dict:
     base["comp_search_term"] = None
     base["comp_source"] = None
     base["appraisal_breakdown"] = None
+    base["listed_at"] = None
+    base["scraped_at"] = None
+    base["posted_relative"] = None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -94,8 +97,9 @@ def _enrich_listing(sl) -> dict:
                     """SELECT deal_score, fair_value, appraisal_note,
                               comp_median, comp_sample_size,
                               comp_search_term, comp_source,
-                              appraisal_breakdown
-                       FROM listings WHERE id = %s AND appraised = TRUE""",
+                              appraisal_breakdown,
+                              listed_at, scraped_at
+                       FROM listings WHERE id = %s""",
                     (sl.id,),
                 )
                 row = cur.fetchone()
@@ -107,12 +111,42 @@ def _enrich_listing(sl) -> dict:
                     base["comp_sample_size"] = row[4]
                     base["comp_search_term"] = row[5]
                     base["comp_source"] = row[6]
-                    base["appraisal_breakdown"] = row[7]  # already a dict from JSONB
+                    base["appraisal_breakdown"] = row[7]
+                    base["listed_at"] = row[8].isoformat() if row[8] else None
+                    base["scraped_at"] = row[9].isoformat() if row[9] else None
+                    # Prefer FB-listed-at; fall back to our scraped-at.
+                    ts = row[8] or row[9]
+                    if ts:
+                        base["posted_relative"] = _humanize_age(ts)
     except Exception:  # noqa: BLE001
         # DB might be down; the rest of the UI should still render.
         pass
 
     return base
+
+
+def _humanize_age(ts) -> str:
+    """Turn a timestamp into 'Posted 3h ago', 'Posted yesterday', 'Posted Apr 28'."""
+    from datetime import datetime, timezone
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    delta = now - ts
+    secs = delta.total_seconds()
+    if secs < 60:
+        return "Just posted"
+    if secs < 3600:
+        m = int(secs // 60)
+        return f"Posted {m}m ago"
+    if secs < 86400:
+        h = int(secs // 3600)
+        return f"Posted {h}h ago"
+    if secs < 86400 * 2:
+        return "Posted yesterday"
+    if secs < 86400 * 7:
+        d = int(secs // 86400)
+        return f"Posted {d}d ago"
+    return f"Posted {ts.strftime('%b %-d')}" if hasattr(ts, "strftime") else "Posted earlier"
 
 
 # --- Routes ---------------------------------------------------------------
@@ -231,6 +265,75 @@ def detail(listing_id: str):
         "source": detail_obj.source,
         "error": error,
         "pipeline": pipeline,
+    })
+
+
+@app.route("/api/searches")
+def api_searches():
+    """Return active saved searches — used to populate the subscribe
+    dropdown so users can pick which alerts they want."""
+    rows = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, keyword, radius_km
+                   FROM user_searches
+                   WHERE active = TRUE
+                   ORDER BY id""",
+            )
+            for r in cur.fetchall():
+                rows.append({"id": r[0], "keyword": r[1], "radius_km": r[2]})
+    return jsonify({"searches": rows})
+
+
+@app.route("/api/subscribe", methods=["POST"])
+def api_subscribe():
+    """Record a notification preference. Either form-encoded or JSON.
+
+    Required: email, search_id
+    Optional: name, phone, score_threshold (defaults 70)
+    """
+    data = request.form if request.form else (request.get_json(silent=True) or {})
+    email = (data.get("email") or "").strip()
+    search_id = data.get("search_id")
+    name = (data.get("name") or "").strip() or None
+    phone = (data.get("phone") or "").strip() or None
+    threshold = data.get("score_threshold") or 70
+
+    if not email or "@" not in email:
+        return jsonify({"ok": False, "error": "valid email required"}), 400
+    try:
+        search_id = int(search_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "search_id required"}), 400
+    try:
+        threshold = max(0, min(100, int(threshold)))
+    except (TypeError, ValueError):
+        threshold = 70
+
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO subscribers
+                       (name, email, phone, search_id, score_threshold)
+                       VALUES (%s, %s, %s, %s, %s)
+                       ON CONFLICT (email, search_id) DO UPDATE SET
+                         name = EXCLUDED.name,
+                         phone = EXCLUDED.phone,
+                         score_threshold = EXCLUDED.score_threshold,
+                         active = TRUE
+                       RETURNING id""",
+                    (name, email, phone, search_id, threshold),
+                )
+                sub_id = cur.fetchone()[0]
+    return jsonify({
+        "ok": True,
+        "subscriber_id": sub_id,
+        "message": (
+            f"Subscribed {email} for deals scoring {threshold}+ "
+            f"on search {search_id}."
+        ),
     })
 
 
