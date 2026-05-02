@@ -149,19 +149,30 @@
                 const score = data.deal_score;
                 const klass = score >= 70 ? "score-high"
                             : score >= 50 ? "score-mid" : "score-low";
+                const ratio = data.ratio || 0;
+                const asking = data.breakdown && data.breakdown.asking_price;
+                const fair = data.fair_value;
                 result.innerHTML =
                     '<div class="appraisal-display ' + klass + '">' +
                     '<div class="score-row">' +
                         '<span class="score-num">' + score + '</span>' +
-                        '<span class="score-label">deal score · ' + (data.confidence || "") + '</span>' +
-                        (data.fair_value ? '<span class="score-fair">fair: $' + Math.round(data.fair_value) + '</span>' : '') +
+                        (data.confidence_pm ? '<span class="score-pm">±' + data.confidence_pm + '</span>' : '') +
+                        '<span class="score-label">deal score</span>' +
+                        (fair ? '<span class="score-fair">fair: $' + Math.round(fair) + '</span>' : '') +
                     '</div>' +
+                    (asking && fair ?
+                        '<div class="score-math">' +
+                            '<span class="math-eq">$' + Math.round(asking) + ' ÷ $' + Math.round(fair) + ' = ratio <strong>' + ratio.toFixed(2) + '</strong></span>' +
+                            '<span class="math-source muted">' + escapeHtml(data.fair_value_source || "") + '</span>' +
+                        '</div>'
+                    : '') +
                     (data.note ? '<div class="score-note">' + escapeHtml(data.note) + '</div>' : '') +
                     '<div class="score-comps muted">' +
                         (data.comp_sample_size || 0) + ' comp(s) for "' +
                         escapeHtml(data.search_term || "") + '"' +
-                        (data.comp_median ? ' · median $' + Math.round(data.comp_median) : '') +
-                        ' · LLM ' + (data.elapsed_s || 0).toFixed(1) + 's' +
+                        (data.outliers_dropped ? ", " + data.outliers_dropped + " outlier(s) dropped" : "") +
+                        (data.comp_median ? ' · raw median $' + Math.round(data.comp_median) : '') +
+                        (data.elapsed_s ? ' · LLM ' + data.elapsed_s.toFixed(1) + 's' : ' · formula-only') +
                     '</div></div>';
                 btn.textContent = "Re-appraise";
             } else {

@@ -293,26 +293,35 @@ def appraise(listing_id: str):
     """Run the full appraisal flow on a single listing right now.
 
     Fetches detail (so we have a description), upserts into the listings
-    table if not already there, then runs the LLM scorer. Returns the
-    appraisal as JSON.
+    table, runs the deterministic stats-based scorer, and returns the
+    full breakdown as JSON.
 
-    Expensive — takes ~20-30s on this hardware. The UI shows a spinner.
+    Fast: typically ~3-8s when comp sample is sufficient (no LLM
+    needed). Slower (~20s) when comps are sparse and the LLM has to
+    estimate fair_value.
     """
+    from dataclasses import asdict
+
+    from deal_finder.appraisal.formula import compute_score, llm_needed
     from deal_finder.appraisal.normalizer import normalize_title
-    from deal_finder.appraisal.scorer import score_listing
+    from deal_finder.appraisal.scorer import estimate_fair_value
     from deal_finder.comps.marketplace import get_comps
     from deal_finder.db.listings import (
         update_appraisal,
         update_comps_resolution,
         upsert_processed,
     )
+    from deal_finder.scraper.facebook import SearchListing
     from deal_finder.scraper.pipeline import _combine
 
     title_arg = request.args.get("title", "")
     raw_price_arg = float(request.args.get("raw_price") or 0.0)
 
-    # 1) Fetch detail
-    detail = get_detail_client().fetch(listing_id)
+    # 1) Fetch detail (description, seller, photos)
+    try:
+        detail = get_detail_client().fetch(listing_id)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": f"detail fetch: {e}"}), 502
     if not detail.description:
         return jsonify({
             "ok": False,
@@ -320,10 +329,7 @@ def appraise(listing_id: str):
             "errors": detail.errors,
         }), 502
 
-    # 2) Build a synthetic SearchListing-shaped object so we can reuse
-    #    the pipeline's `_combine`. Anything missing falls back to args
-    #    sent by the client.
-    from deal_finder.scraper.facebook import SearchListing
+    # 2) Synthesize a SearchListing so we can reuse pipeline._combine
     sl = SearchListing(
         id=listing_id,
         title=detail.title or title_arg,
@@ -337,61 +343,99 @@ def appraise(listing_id: str):
     )
     pl = _combine(sl, detail)
 
-    # 3) Persist
-    with get_conn() as conn:
-        with conn:
-            upsert_processed(conn, pl)
+    # 3) Persist the listing row so the appraisal has somewhere to land
+    try:
+        with get_conn() as conn:
+            with conn:
+                upsert_processed(conn, pl)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": f"db upsert: {e}"}), 500
 
-    # 4) Appraise
-    search_term = normalize_title(pl.title) or pl.title
-    comp = get_comps(
-        search_term=search_term,
-        lat=49.2827, lng=-123.1207, radius_km=1500,
-        exclude_listing_id=listing_id,
-    )
-    appraisal = score_listing(
-        title=pl.title,
-        asking_price=pl.resolved_price,
-        description=pl.description,
-        location=pl.seller_location,
-        comp=comp,
-        raw_price=pl.raw_price,
-        price_extracted=pl.price_extracted_from_description,
-    )
-    if appraisal is None:
-        return jsonify({"ok": False, "error": "LLM scoring failed"}), 502
+    # 4) Run comps
+    try:
+        search_term = normalize_title(pl.title) or pl.title
+        comp = get_comps(
+            search_term=search_term,
+            lat=49.2827, lng=-123.1207, radius_km=1500,
+            exclude_listing_id=listing_id,
+        )
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": f"comp fetch: {e}"}), 502
 
-    note = appraisal.note
-    if appraisal.confidence:
-        note = f"[{appraisal.confidence}] {note}".strip()
+    # 5) LLM fair_value estimate ONLY if comps are sparse
+    llm_estimate = None
+    note = ""
+    model_used = "formula-only"
+    if llm_needed(comp):
+        llm_estimate = estimate_fair_value(
+            title=pl.title,
+            asking_price=pl.resolved_price,
+            description=pl.description,
+            location=pl.seller_location,
+            comp=comp,
+            raw_price=pl.raw_price,
+            price_extracted=pl.price_extracted_from_description,
+        )
+        if llm_estimate is not None:
+            note = llm_estimate.note
+            model_used = llm_estimate.model
 
-    with get_conn() as conn:
-        with conn:
-            update_comps_resolution(
-                conn, listing_id,
-                search_term=comp.search_term, source=comp.source,
-                median=comp.median, mean=comp.mean,
-                minimum=comp.minimum, maximum=comp.maximum,
-                sample_size=comp.sample_size,
-            )
-            update_appraisal(
-                conn, listing_id,
-                deal_score=appraisal.deal_score,
-                fair_value=appraisal.fair_value,
-                appraisal_note=note,
-                appraisal_model=appraisal.model,
-            )
+    # 6) Compute deterministic score
+    try:
+        breakdown = compute_score(
+            asking_price=pl.resolved_price,
+            comp=comp,
+            fair_value_from_llm=(
+                llm_estimate.fair_value if llm_estimate else None
+            ),
+        )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": f"formula: {e}"}), 422
+
+    # 7) Persist
+    annotated_note = note
+    if breakdown.confidence_label:
+        annotated_note = (
+            f"[{breakdown.confidence_label} ±{breakdown.confidence_pm}] "
+            f"{note}".strip()
+        )
+
+    try:
+        with get_conn() as conn:
+            with conn:
+                update_comps_resolution(
+                    conn, listing_id,
+                    search_term=comp.search_term, source=comp.source,
+                    median=comp.median, mean=comp.mean,
+                    minimum=comp.minimum, maximum=comp.maximum,
+                    sample_size=comp.sample_size,
+                )
+                update_appraisal(
+                    conn, listing_id,
+                    deal_score=breakdown.deal_score,
+                    fair_value=breakdown.fair_value,
+                    appraisal_note=annotated_note,
+                    appraisal_model=model_used,
+                    breakdown=breakdown,
+                )
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"ok": False, "error": f"db update: {e}"}), 500
 
     return jsonify({
         "ok": True,
-        "deal_score": appraisal.deal_score,
-        "fair_value": appraisal.fair_value,
-        "confidence": appraisal.confidence,
-        "note": appraisal.note,
+        "deal_score": breakdown.deal_score,
+        "fair_value": breakdown.fair_value,
+        "confidence": breakdown.confidence_label,
+        "confidence_pm": breakdown.confidence_pm,
+        "note": note or annotated_note,
         "search_term": comp.search_term,
         "comp_median": comp.median,
         "comp_sample_size": comp.sample_size,
-        "elapsed_s": appraisal.elapsed_s,
+        "ratio": breakdown.ratio,
+        "fair_value_source": breakdown.fair_value_source,
+        "outliers_dropped": breakdown.outliers_dropped,
+        "elapsed_s": llm_estimate.elapsed_s if llm_estimate else 0.0,
+        "breakdown": asdict(breakdown),
     })
 
 
