@@ -31,6 +31,7 @@ from ..appraisal.worker import _recover_price, drain_queue
 from ..comps.marketplace import get_comps
 from ..db.connection import get_conn
 from ..db.events import record_event
+from ..db.geo import geocode_city, haversine_km
 from ..db.listings import (
     existing_ids,
     update_appraisal,
@@ -103,12 +104,52 @@ def poll_search(search_id: int) -> PollResult:
         seen = existing_ids(conn, raw_ids)
 
     new_listings = [sl for sl in page.listings if sl.id not in seen]
+
+    # Distance filter: FB's filter_radius_km is unreliable for small
+    # values, returning Nanaimo listings on a 5km radius search.
+    # Geocode each unique city in the result set once, haversine to the
+    # watch's home, drop anything beyond radius_km. fail-open on
+    # geocoding errors (keep the listing rather than silently drop).
+    distance_dropped = 0
+    if new_listings and search.get("radius_km"):
+        kept: list[SearchListing] = []
+        home_lat = float(search["latitude"])
+        home_lng = float(search["longitude"])
+        radius = float(search["radius_km"])
+        # Be generous to absorb city-center vs actual-address slop.
+        # FB's seller_location is just "Vancouver" — geocoded to a
+        # single point, but Vancouver is ~12 km wide. A 5 km user
+        # radius needs at least 8 km of slack to keep nearby Vancouver
+        # listings while still rejecting Burnaby / Surrey / Nanaimo.
+        # Formula: max(radius + 8 km, 1.3 × radius) so the buffer
+        # scales with the requested radius for larger searches.
+        soft_radius = max(radius + 8.0, radius * 1.3)
+        for sl in new_listings:
+            if not sl.seller_location:
+                kept.append(sl)
+                continue
+            coords = geocode_city(sl.seller_location)
+            if coords is None:
+                kept.append(sl)
+                continue
+            dist = haversine_km(home_lat, home_lng, coords[0], coords[1])
+            if dist <= soft_radius:
+                kept.append(sl)
+            else:
+                distance_dropped += 1
+                logger.debug(
+                    "%s dropped: %.1f km > %.1f km (%s)",
+                    sl.id, dist, soft_radius, sl.seller_location,
+                )
+        new_listings = kept
+
     if not new_listings:
         elapsed_s = time.perf_counter() - t0
         record_event(
             "poll", search_id=search_id, duration_ms=int(elapsed_s * 1000),
             keyword=keyword, raw_count=len(page.listings),
             new_count=0, appraised_count=0, rejected_count=0,
+            distance_dropped=distance_dropped,
         )
         return PollResult(
             search_id, keyword, len(page.listings), 0, 0, 0, elapsed_s,
@@ -150,6 +191,7 @@ def poll_search(search_id: int) -> PollResult:
         new_count=len(new_listings),
         appraised_count=appraised,
         rejected_count=rejected,
+        distance_dropped=distance_dropped,
     )
     return PollResult(
         search_id, keyword, len(page.listings), len(new_listings),

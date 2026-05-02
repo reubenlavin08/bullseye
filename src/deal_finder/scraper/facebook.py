@@ -102,6 +102,8 @@ class SearchPage:
     listings: list[SearchListing] = field(default_factory=list)
     end_cursor: str | None = None
     has_more: bool = False
+    rate_limited: bool = False
+    error_message: str | None = None
 
 
 # --- Rate limiter ---------------------------------------------------------
@@ -267,27 +269,30 @@ class FacebookSearchClient:
         time.sleep(delay)
 
     def _parse_page(self, body: dict[str, Any]) -> SearchPage:
+        rate_limited = False
+        error_message: str | None = None
         if "errors" in body:
             logger.warning(
                 "fb-search GraphQL errors: %s",
                 json.dumps(body["errors"])[:500],
             )
-            # Persist any rate-limit / critical errors so the dashboard
-            # can show them. Local import to avoid a circular at module
-            # load time (db.events imports db.connection imports
-            # nothing from scraper, but the future-proof keeps it lazy).
             try:
                 from ..db.events import record_event
                 for err in body.get("errors") or []:
-                    msg = (err.get("message") or "").lower()
+                    msg = (err.get("message") or "")
                     code = err.get("code")
-                    is_rate_limit = "rate limit" in msg or code == 1675004
+                    is_rate_limit = "rate limit" in msg.lower() or code == 1675004
                     record_event(
                         "fb_rate_limit" if is_rate_limit else "fb_graphql_error",
                         code=code,
-                        message=(err.get("message") or "")[:200],
+                        message=msg[:200],
                         severity=err.get("severity"),
                     )
+                    if is_rate_limit:
+                        rate_limited = True
+                        error_message = error_message or msg[:200]
+                    elif error_message is None:
+                        error_message = msg[:200]
             except Exception:  # noqa: BLE001 — never crash the scraper
                 pass
 
@@ -304,6 +309,8 @@ class FacebookSearchClient:
             listings=listings,
             end_cursor=end_cursor,
             has_more=bool(end_cursor),
+            rate_limited=rate_limited,
+            error_message=error_message,
         )
 
 

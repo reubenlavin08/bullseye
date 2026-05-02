@@ -220,6 +220,21 @@ def search():
     enriched = [_enrich_listing(sl) for sl in page.listings]
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
+    # Surface rate-limit / GraphQL errors to the user so an empty result
+    # set isn't silently confusing. The scheduler hammers FB for poll
+    # cycles; while it's running heavy, ad-hoc Test searches can be
+    # blocked. Tell the user that explicitly.
+    error = None
+    if page.rate_limited:
+        error = (
+            "Facebook is rate-limiting our requests. The background "
+            "scheduler is polling your saved watches, which uses our "
+            "shared FB quota. Pause non-priority watches in the right "
+            "panel (Manage tab) and try again in a minute."
+        )
+    elif page.error_message and not enriched:
+        error = f"Facebook returned an error: {page.error_message}"
+
     meta = {
         "count": len(enriched),
         "elapsed_ms": elapsed_ms,
@@ -233,7 +248,7 @@ def search():
         defaults=_form_to_defaults(request.form),
         results=enriched,
         meta=meta,
-        error=None,
+        error=error,
     )
 
 
