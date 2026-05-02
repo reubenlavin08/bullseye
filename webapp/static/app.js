@@ -438,9 +438,53 @@
         });
     }
 
+    async function setupBulkForm() {
+        const form = document.getElementById("bulk-form");
+        if (!form) return;
+        const banner = document.getElementById("bulk-banner");
+
+        form.addEventListener("submit", async (ev) => {
+            ev.preventDefault();
+            banner.hidden = true;
+            banner.classList.remove("is-error");
+            const fd = new FormData(form);
+            try {
+                const res = await fetch("/api/searches/bulk", {
+                    method: "POST",
+                    body: fd,
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    let lines = [data.summary || "Saved."];
+                    if (data.created && data.created.length) {
+                        lines.push("New: " + data.created.map(c => c.keyword).join(", "));
+                    }
+                    if (data.duplicate && data.duplicate.length) {
+                        lines.push("Already saved (re-activated): " +
+                            data.duplicate.map(c => c.keyword).join(", "));
+                    }
+                    banner.textContent = lines.join(" · ");
+                    banner.hidden = false;
+                    form.reset();
+                    // Refresh subscribe dropdown so new searches appear
+                    setupSubscribeForm();
+                } else {
+                    banner.textContent = "Couldn't save: " + (data.error || "unknown error");
+                    banner.classList.add("is-error");
+                    banner.hidden = false;
+                }
+            } catch (err) {
+                banner.textContent = "Network error: " + err.message;
+                banner.classList.add("is-error");
+                banner.hidden = false;
+            }
+        });
+    }
+
     function bootAll() {
         init();
         setupReveal();
+        setupBulkForm();
         setupSubscribeForm();
     }
 

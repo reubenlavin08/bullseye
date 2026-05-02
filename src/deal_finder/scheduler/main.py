@@ -35,6 +35,7 @@ from .jobs import (
     drain_appraisal_safety_net,
     list_active_search_ids,
     poll_search,
+    send_digest_emails,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_S = int(os.environ.get("POLL_INTERVAL_S", "60"))
 SAFETY_NET_INTERVAL_S = int(os.environ.get("SAFETY_NET_INTERVAL_S", "600"))
 RELOAD_INTERVAL_S = int(os.environ.get("RELOAD_INTERVAL_S", "300"))
+DIGEST_INTERVAL_S = int(os.environ.get("DIGEST_INTERVAL_S", "180"))
 WARMUP_LLM_ON_BOOT = os.environ.get("WARMUP_LLM_ON_BOOT", "1") not in ("0", "")
 
 
@@ -143,6 +145,17 @@ def run_forever() -> int:
         seconds=SAFETY_NET_INTERVAL_S,
         id="safety_net",
         name="safety net appraisal drain",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Email digest sender — groups all pending matches per recipient.
+    scheduler.add_job(
+        send_digest_emails,
+        trigger="interval",
+        seconds=DIGEST_INTERVAL_S,
+        id="digest_emails",
+        name="send pending digest emails",
         max_instances=1,
         coalesce=True,
     )

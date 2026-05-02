@@ -286,6 +286,104 @@ def api_searches():
     return jsonify({"searches": rows})
 
 
+@app.route("/api/searches/bulk", methods=["POST"])
+def api_searches_bulk():
+    """Create many saved searches at once.
+
+    Use case: paste a list of keywords (e.g. produced by Claude when
+    asked 'list all electronics components I'd want'). All searches
+    get the same shared params (location, radius, price filters).
+
+    Body: form-encoded or JSON
+        keywords      newline-or-comma-separated string of keywords
+        lat, lng      float (default Vancouver)
+        radius_km     int  (default 40)
+        price_min     int  (optional)
+        price_max     int  (optional)
+
+    Returns the IDs of newly-created searches + which ones were
+    duplicates of existing ones (we de-dup on (keyword, lat, lng,
+    radius_km) for the user_id).
+    """
+    data = request.form if request.form else (request.get_json(silent=True) or {})
+    raw = (data.get("keywords") or "").strip()
+    if not raw:
+        return jsonify({"ok": False, "error": "keywords required"}), 400
+
+    # Split on newlines OR commas; trim and dedupe.
+    import re
+    parts = [p.strip() for p in re.split(r"[\n,]+", raw) if p.strip()]
+    seen = set()
+    keywords: list[str] = []
+    for p in parts:
+        k = p.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        keywords.append(p)
+    if not keywords:
+        return jsonify({"ok": False, "error": "no usable keywords"}), 400
+
+    try:
+        lat = float(data.get("lat") or 49.2827)
+        lng = float(data.get("lng") or -123.1207)
+        radius_km = int(data.get("radius_km") or 40)
+        pmin_str = (str(data.get("price_min") or "")).strip()
+        pmax_str = (str(data.get("price_max") or "")).strip()
+        price_min = int(pmin_str) if pmin_str else None
+        price_max = int(pmax_str) if pmax_str else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad numeric input"}), 400
+
+    created: list[dict] = []
+    duplicate: list[dict] = []
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                for kw in keywords:
+                    # Dedup: same keyword (case-insensitive) within the
+                    # same radius. We use BETWEEN on lat/lng to absorb
+                    # REAL-precision rounding (Postgres stores REAL as
+                    # 32-bit float; round-tripping a literal Python float
+                    # can shift the last bit so == fails).
+                    cur.execute(
+                        """SELECT id FROM user_searches
+                           WHERE LOWER(keyword) = LOWER(%s)
+                             AND radius_km = %s
+                             AND ABS(latitude - %s::real) < 0.001
+                             AND ABS(longitude - %s::real) < 0.001""",
+                        (kw, radius_km, lat, lng),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        duplicate.append({"keyword": kw, "id": existing[0]})
+                        # Re-activate if it was disabled
+                        cur.execute(
+                            "UPDATE user_searches SET active = TRUE WHERE id = %s",
+                            (existing[0],),
+                        )
+                        continue
+                    cur.execute(
+                        """INSERT INTO user_searches
+                           (keyword, latitude, longitude, radius_km,
+                            price_min, price_max, active)
+                           VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                           RETURNING id""",
+                        (kw, lat, lng, radius_km, price_min, price_max),
+                    )
+                    created.append({"keyword": kw, "id": cur.fetchone()[0]})
+
+    return jsonify({
+        "ok": True,
+        "created": created,
+        "duplicate": duplicate,
+        "summary": (
+            f"{len(created)} new search(es) created"
+            + (f", {len(duplicate)} re-activated" if duplicate else "")
+        ),
+    })
+
+
 @app.route("/api/subscribe", methods=["POST"])
 def api_subscribe():
     """Record a notification preference. Either form-encoded or JSON.

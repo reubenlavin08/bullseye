@@ -282,6 +282,18 @@ def drain_appraisal_safety_net() -> None:
         )
 
 
+def send_digest_emails() -> None:
+    """Build and send one digest email per subscriber for any
+    not-yet-notified, score-passing listings. See alerts/digest.py."""
+    from ..alerts.digest import send_pending_digests
+    stats = send_pending_digests()
+    if stats["sent"] > 0 or stats["failed"] > 0:
+        logger.info(
+            "digest tick: sent=%d failed=%d total_listings=%d",
+            stats["sent"], stats["failed"], stats["total_listings"],
+        )
+
+
 def list_active_search_ids() -> list[int]:
     with get_conn() as conn:
         with conn.cursor() as cur:

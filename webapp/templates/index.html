@@ -17,9 +17,9 @@
                 <span class="subtitle">statistical marketplace appraisal</span>
             </div>
             <nav class="header-nav">
+                <a href="#bulk">Save watches</a>
                 <a href="#subscribe">Subscribe</a>
                 <a href="#search-form">Test search</a>
-                <a href="#listings">Listings</a>
             </nav>
         </div>
     </header>
@@ -38,19 +38,71 @@
         </div>
     </section>
 
-    <section class="subscribe-section reveal" id="subscribe">
+    <section class="subscribe-section reveal" id="bulk">
         <div class="container">
             <div class="section-head">
                 <div>
-                    <div class="section-eyebrow">step one · subscribe</div>
-                    <h2>Set your alert.</h2>
+                    <div class="section-eyebrow">step one · save your searches</div>
+                    <h2>Paste a list — get one watch per term.</h2>
                 </div>
             </div>
 
             <p class="hero-sub" style="margin-bottom: 28px; max-width: 720px;">
-                Pick the saved search and a score threshold (70+ is "good deal",
-                85+ is "drop everything and message the seller").
-                Every listing we find above your threshold lands in your inbox.
+                Have an LLM produce a list of items you want, paste it here,
+                hit save. We create one watch per line and apply the same
+                location + radius + price filters to all of them.
+            </p>
+
+            <form id="bulk-form" class="subscribe-form">
+                <div class="field field-full">
+                    <label for="bulk-keywords">Keywords (one per line, or comma-separated)</label>
+                    <textarea id="bulk-keywords" name="keywords" rows="6"
+                              placeholder="raspberry pi 5
+arduino uno r4
+esp32 dev board
+soldering iron
+multimeter Fluke 87"
+                              required
+                              style="background:#fff;border:1px solid var(--border-strong);border-radius:var(--radius-sm);color:var(--fg);padding:14px 16px;font:inherit;font-size:15px;font-family:'JetBrains Mono', ui-monospace, monospace;line-height:1.6;resize:vertical;"></textarea>
+                </div>
+                <div class="field">
+                    <label for="bulk-radius">Radius (km)</label>
+                    <input type="number" id="bulk-radius" name="radius_km"
+                           value="40" min="1" max="500">
+                </div>
+                <div class="field">
+                    <label for="bulk-price-min">Min price (optional)</label>
+                    <input type="number" id="bulk-price-min" name="price_min"
+                           min="0" placeholder="—">
+                </div>
+                <div class="field">
+                    <label for="bulk-price-max">Max price (optional)</label>
+                    <input type="number" id="bulk-price-max" name="price_max"
+                           min="0" placeholder="—">
+                </div>
+                <div class="field field-full">
+                    <button type="submit" class="btn">Save all watches</button>
+                </div>
+            </form>
+
+            <div id="bulk-banner" class="subscribe-banner" hidden></div>
+        </div>
+    </section>
+
+    <section class="subscribe-section reveal" id="subscribe">
+        <div class="container">
+            <div class="section-head">
+                <div>
+                    <div class="section-eyebrow">step two · subscribe to alerts</div>
+                    <h2>Get one digest email when deals appear.</h2>
+                </div>
+            </div>
+
+            <p class="hero-sub" style="margin-bottom: 28px; max-width: 720px;">
+                Subscribe an email to one of your watches. When a listing scores
+                above your threshold, we email you. If multiple deals across
+                your watches land in the same window, you get one digest
+                — not a flood of single-listing emails.
             </p>
 
             <form id="subscribe-form" class="subscribe-form">

@@ -46,6 +46,70 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bulk(args: argparse.Namespace) -> int:
+    """Read keywords from a file (one per line, # = comment) and
+    create one saved search per line, all sharing the same params."""
+    import re
+    if args.file == "-":
+        raw = sys.stdin.read()
+    else:
+        raw = Path(args.file).read_text(encoding="utf-8")
+    parts = []
+    for line in re.split(r"[\n,]+", raw):
+        s = line.strip()
+        if s and not s.startswith("#"):
+            parts.append(s)
+    if not parts:
+        print("no keywords found", file=sys.stderr)
+        return 1
+
+    seen = set()
+    keywords = []
+    for p in parts:
+        k = p.lower()
+        if k not in seen:
+            seen.add(k)
+            keywords.append(p)
+
+    created = 0
+    duplicate = 0
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                for kw in keywords:
+                    cur.execute(
+                        """SELECT id FROM user_searches
+                           WHERE LOWER(keyword) = LOWER(%s)
+                             AND radius_km = %s
+                             AND ABS(latitude - %s::real) < 0.001
+                             AND ABS(longitude - %s::real) < 0.001""",
+                        (kw, args.radius_km, args.lat, args.lng),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        duplicate += 1
+                        cur.execute(
+                            "UPDATE user_searches SET active = TRUE WHERE id = %s",
+                            (existing[0],),
+                        )
+                        print(f"  re-activated id={existing[0]}: {kw!r}")
+                        continue
+                    cur.execute(
+                        """INSERT INTO user_searches
+                           (keyword, latitude, longitude, radius_km,
+                            price_min, price_max, active)
+                           VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                           RETURNING id""",
+                        (kw, args.lat, args.lng, args.radius_km,
+                         args.price_min, args.price_max),
+                    )
+                    new_id = cur.fetchone()[0]
+                    created += 1
+                    print(f"  added id={new_id}: {kw!r}")
+    print(f"\n{created} new search(es), {duplicate} already saved")
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -117,6 +181,15 @@ def main() -> int:
     add.add_argument("--price-min", type=int, default=None)
     add.add_argument("--price-max", type=int, default=None)
 
+    bk = sub.add_parser("bulk", help="Add many searches at once from a file")
+    bk.add_argument("file", help="Path to a file with keywords, "
+                                 "one per line. Use '-' for stdin.")
+    bk.add_argument("--lat", type=float, default=DEFAULT_LAT)
+    bk.add_argument("--lng", type=float, default=DEFAULT_LNG)
+    bk.add_argument("--radius", type=int, default=40, dest="radius_km")
+    bk.add_argument("--price-min", type=int, default=None)
+    bk.add_argument("--price-max", type=int, default=None)
+
     sub.add_parser("list", help="List all saved searches")
 
     en = sub.add_parser("enable", help="Mark a search active=true")
@@ -131,6 +204,8 @@ def main() -> int:
     args = p.parse_args()
     if args.cmd == "add":
         return cmd_add(args)
+    if args.cmd == "bulk":
+        return cmd_bulk(args)
     if args.cmd == "list":
         return cmd_list(args)
     if args.cmd == "enable":
