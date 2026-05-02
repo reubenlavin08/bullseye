@@ -443,6 +443,25 @@ def _confidence(comp: CompStats, fv_source: str) -> tuple[int, str]:
         elif iqr_ratio > 0.5:
             base += 4
 
+    # Outlier-rate penalty: when Tukey fences flag a lot of points as
+    # outliers, the underlying distribution isn't roughly normal — it's
+    # heterogeneous (search term matched multiple categories, conditions
+    # vary wildly, etc). The trimmed median is less trustworthy than
+    # its post-trim n alone would suggest because the population we
+    # trimmed from was suspect to begin with.
+    #
+    # IQR-ratio alone doesn't catch this: when the middle 50% is tight
+    # but the tails are wild (the user-reported gas-scooter case with
+    # n_raw=14, n_trimmed=6, IQR/median=0.38), IQR/median looks clean
+    # while 57% of comps got dropped. That's a red flag the existing
+    # signals miss.
+    if comp.sample_size and comp.outliers_dropped:
+        outlier_rate = comp.outliers_dropped / comp.sample_size
+        if outlier_rate >= 0.5:
+            base += 6           # >50% outliers — hammer it
+        elif outlier_rate >= 0.3:
+            base += 3           # 30-50% — meaningful contamination
+
     if base <= 7:
         label = "high"
     elif base <= 14:

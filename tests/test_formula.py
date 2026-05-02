@@ -313,6 +313,82 @@ def test_data_quality_clean_when_iqr_is_tight():
     assert s.iqr_to_median_ratio < 1.0
 
 
+# --- Outlier-rate confidence penalty -----------------------------------
+# When >30% of raw comps were flagged as outliers, the underlying
+# distribution is heterogeneous and confidence should drop. Existed gap:
+# tight middle 50% of data + wild tails -> IQR/median looks clean while
+# half the population is outliers (the user-reported gas-scooter case).
+
+
+def test_high_outlier_rate_drops_confidence():
+    """Gas-scooter case: n=14, 8 outliers, IQR/median tight (clean by
+    the IQR test) — outlier-rate signal alone should drop us from
+    medium to low confidence."""
+    comp = _comp(
+        n=14,
+        median=265.0,
+        trimmed_median=265.0,
+        iqr=100.0,            # clean IQR/median = 0.38
+        outliers=8,           # 57% outliers — the smoking gun
+    )
+    s = compute_score(asking_price=70.0, comp=comp)
+    # base for n_trimmed=6 is 12 (medium); +6 outlier-rate -> 18 (low)
+    assert s.confidence_pm == 18
+    assert s.confidence_label == "low"
+
+
+def test_moderate_outlier_rate_partial_penalty():
+    """Borderline outlier rate (30-50%) -> +3 not +6."""
+    comp = _comp(
+        n=10,
+        median=300.0,
+        trimmed_median=300.0,
+        iqr=100.0,
+        outliers=4,           # 40%
+    )
+    s = compute_score(asking_price=200.0, comp=comp)
+    # base for n_trimmed=6 is 12; +3 -> 15 (still low boundary)
+    assert s.confidence_pm == 15
+    assert s.confidence_label == "low"
+
+
+def test_clean_data_no_outlier_penalty():
+    """No outliers dropped -> confidence model unchanged from before."""
+    comp = _comp(
+        n=14, median=400.0, trimmed_median=400.0,
+        iqr=100.0, outliers=0,
+    )
+    s = compute_score(asking_price=300.0, comp=comp)
+    # n_trimmed=14 -> base=5, no penalty -> high confidence
+    assert s.confidence_pm == 5
+    assert s.confidence_label == "high"
+
+
+def test_low_outlier_rate_below_threshold_no_penalty():
+    """1/12 outliers (8%) is below 30% threshold -> no penalty."""
+    comp = _comp(
+        n=12, median=400.0, trimmed_median=400.0,
+        iqr=100.0, outliers=1,
+    )
+    s = compute_score(asking_price=300.0, comp=comp)
+    # n_trimmed=11 -> base=8, no outlier penalty -> medium
+    assert s.confidence_pm == 8
+    assert s.confidence_label == "medium"
+
+
+def test_outlier_rate_stacks_with_iqr_penalty():
+    """Both signals fire when both conditions hold."""
+    comp = _comp(
+        n=10, median=400.0, trimmed_median=400.0,
+        iqr=300.0,               # IQR/median = 0.75 -> +4
+        outliers=5,              # 50% outliers -> +6
+    )
+    s = compute_score(asking_price=300.0, comp=comp)
+    # n_trimmed=5 -> base=12; +4 IQR; +6 outlier -> 22 (low)
+    assert s.confidence_pm == 22
+    assert s.confidence_label == "low"
+
+
 # --- Percentile rank ----------------------------------------------------
 
 def test_percentile_rank_in_middle_of_range():
