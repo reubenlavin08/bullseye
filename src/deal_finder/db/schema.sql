@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS listings (
     seller_type                         TEXT,
     description                         TEXT,
     listing_url                         TEXT,
+    category_id                         TEXT,                             -- FB marketplace_listing_category_id
     listed_at                           TIMESTAMPTZ,                      -- when FB posted it
     scraped_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     detail_source                       TEXT,                             -- 'pdp' | 'html' | NULL

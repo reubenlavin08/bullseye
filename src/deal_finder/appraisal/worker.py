@@ -70,11 +70,14 @@ class WorkerStats:
 
 
 def warmup_models() -> None:
-    """Preload both models into RAM/VRAM. Costs ~30s once; saves cold-start
-    on every subsequent listing."""
+    """Preload the appraisal model into RAM/VRAM. Since the normalizer
+    and scorer now use the same 3B model, this is a single warmup.
+    Saves cold-start on the first real listing.
+    """
     cli = get_default_client()
     cli.warmup(NORMALIZER_MODEL)
-    cli.warmup(SCORER_MODEL)
+    if SCORER_MODEL != NORMALIZER_MODEL:
+        cli.warmup(SCORER_MODEL)
 
 
 def drain_queue(
@@ -151,7 +154,7 @@ def _fetch_queue(limit: int) -> list[dict]:
             cur.execute(
                 """SELECT id, title, price, raw_price,
                           price_extracted_from_description,
-                          description, seller_location
+                          description, seller_location, category_id
                    FROM listings
                    WHERE appraised = FALSE AND rejected = FALSE
                    ORDER BY scraped_at ASC
@@ -163,6 +166,7 @@ def _fetch_queue(limit: int) -> list[dict]:
                     "id": r[0], "title": r[1], "price": r[2],
                     "raw_price": r[3], "price_extracted": r[4],
                     "description": r[5], "seller_location": r[6],
+                    "category_id": r[7],
                 }
                 for r in cur.fetchall()
             ]
@@ -214,57 +218,46 @@ def _process_one(
     search_term = normalize_title(title) or title
     logger.debug("normalize %s: %r -> %r", listing_id, title, search_term)
 
-    # 2. Fetch comps (cache-first; refetches on miss). Pass asking
-    #    price so the bimodal-cluster splitter can pick the right
-    #    price tier when comps span multiple categories (the "boat
-    #    motor" problem).
+    # 2. Fetch comps (cache-first; refetches on miss). Pass:
+    #    - asking_price so the bimodal-cluster splitter can pick the
+    #      right price tier when comps span categories (boat-motor case)
+    #    - target_text so the embedding filter can drop comps that
+    #      aren't actually similar to this listing (vintage / niche cases)
+    #
+    # We use the NORMALIZED title (post-LLM cleanup) rather than the raw
+    # title + description. Reason: comp titles are short and clean,
+    # while listing descriptions are noisy ("Used scooter, runs well,
+    # just needs new rear tire"). Embedding a verbose target against
+    # short comp titles drags all similarities down. The clean
+    # normalized form ("Segway Ninebot ES2 electric scooter") aligns
+    # well with comp titles in vector space.
+    target_text = search_term
     comp = get_comps(
         search_term=search_term,
         lat=lat, lng=lng, radius_km=radius_km,
         exclude_listing_id=listing_id,
         asking_price=asking,
+        target_text=target_text,
+        category_id=row.get("category_id"),
     )
 
-    # 3. Get LLM fair_value estimate ONLY when comps are too sparse.
-    #    With enough comps, the trimmed median (× asking discount) is
-    #    the fair value, no LLM needed.
-    llm_estimate = None
-    note = ""
-    model_used = "formula-only"
-    if llm_needed(comp):
-        llm_estimate = estimate_fair_value(
-            title=title,
-            asking_price=asking,
-            description=description or None,
-            location=row.get("seller_location"),
-            comp=comp,
-            raw_price=raw_price,
-            price_extracted=price_extracted,
-        )
-        if llm_estimate is not None:
-            note = llm_estimate.note
-            model_used = llm_estimate.model
-
-    # 4. Compute score deterministically from comps + (optional) LLM.
+    # 3. Compute score deterministically from comps. Refuses to score
+    #    when comp data is insufficient (returns unscoreable=True).
     try:
-        breakdown = compute_score(
-            asking_price=asking,
-            comp=comp,
-            fair_value_from_llm=(
-                llm_estimate.fair_value if llm_estimate else None
-            ),
-        )
+        breakdown = compute_score(asking_price=asking, comp=comp)
     except ValueError as e:
-        logger.warning("formula failed for %s: %s", listing_id, e)
+        logger.warning("formula rejected listing %s: %s", listing_id, e)
         return False
 
-    # 5. Persist breakdown + comp resolution + appraisal in one txn.
-    annotated_note = note
-    if breakdown.confidence_label:
+    # 4. Persist breakdown + comp resolution + appraisal in one txn.
+    if breakdown.unscoreable:
+        annotated_note = f"[unscoreable] {breakdown.unscoreable_reason}"
+    elif breakdown.confidence_label:
         annotated_note = (
-            f"[{breakdown.confidence_label} ±{breakdown.confidence_pm}] "
-            f"{note}".strip()
+            f"[{breakdown.confidence_label} ±{breakdown.confidence_pm}]"
         )
+    else:
+        annotated_note = ""
 
     with get_conn() as conn:
         with conn:
@@ -283,19 +276,27 @@ def _process_one(
                 deal_score=breakdown.deal_score,
                 fair_value=breakdown.fair_value,
                 appraisal_note=annotated_note,
-                appraisal_model=model_used,
+                appraisal_model="formula-only",
                 breakdown=breakdown,
             )
 
-    logger.info(
-        "%s | score=%d conf=%s±%d ratio=%.2f n=%d trimmed=%d "
-        "fair=$%.0f source=%s | %s",
-        listing_id, breakdown.deal_score,
-        breakdown.confidence_label, breakdown.confidence_pm,
-        breakdown.ratio, comp.sample_size, breakdown.outliers_dropped,
-        breakdown.fair_value, breakdown.fair_value_source,
-        title[:60],
-    )
+    if breakdown.unscoreable:
+        logger.info(
+            "%s | UNSCOREABLE: %s | n=%d | %s",
+            listing_id, breakdown.unscoreable_reason,
+            comp.sample_size, title[:60],
+        )
+    else:
+        logger.info(
+            "%s | score=%d conf=%s±%d pct=%.2f n=%d "
+            "fair=$%.0f | %s",
+            listing_id, breakdown.deal_score,
+            breakdown.confidence_label, breakdown.confidence_pm,
+            breakdown.percentile_rank or 0,
+            comp.sample_size,
+            breakdown.fair_value or 0,
+            title[:60],
+        )
     return True
 
 

@@ -49,7 +49,8 @@ _INSERT_COLS = (
     "id", "search_id", "title", "price", "raw_price",
     "price_extracted_from_description", "previous_price", "is_pending",
     "photo_url", "seller_name", "seller_location", "seller_type",
-    "description", "listing_url", "listed_at", "scraped_at",
+    "description", "listing_url", "category_id",
+    "listed_at", "scraped_at",
     "detail_source", "rejected", "rejection_reason",
 )
 
@@ -87,6 +88,7 @@ def upsert_processed(
         "seller_type": pl.seller_type,
         "description": pl.description,
         "listing_url": pl.listing_url,
+        "category_id": getattr(pl, "category_id", None),
         "listed_at": listed_at,
         "scraped_at": datetime.now(timezone.utc),
         "detail_source": pl.detail_source,

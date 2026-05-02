@@ -45,52 +45,54 @@ def _comp(
     )
 
 
-# --- The user's iPhone 11 bug -------------------------------------------
+# --- Percentile scoring semantics (formula 2.0) -------------------------
+# Score = (1 - percentile_rank) * 100, capped by confidence.
+# "Score X means this listing is cheaper than X% of similar listings."
 
-def test_iphone_11_overpriced_case_now_scores_low():
-    """The bug the user reported: iPhone 11 at $250 with median asking
-    $230 should score LOW, not 89. With trimmed_median=$230 and 20%
-    asking discount, fair_value=$184. Asking $250 / fair $184 = 1.36.
-    Curve says ratio 1.36 -> score ~22."""
+def test_asking_well_below_min_scores_max():
+    """Asking cheaper than every comp → percentile 0 → score capped at
+    the confidence ceiling (typically 95 for high-confidence)."""
+    comp = _comp(n=15, median=400.0, trimmed_median=400.0, iqr=40.0)
+    # _comp helper sets minimum = median * 0.5 = 200; asking $50 < $200
+    s = compute_score(asking_price=50.0, comp=comp)
+    assert s.percentile_rank == 0.0
+    assert s.deal_score >= 90
+
+
+def test_asking_at_median_scores_about_50():
+    """Asking equal to the median → percentile 0.5 → score ~50."""
+    comp = _comp(n=10, median=250.0, trimmed_median=250.0, iqr=40.0)
+    s = compute_score(asking_price=250.0, comp=comp)
+    assert s.percentile_rank == pytest.approx(0.5, abs=0.01)
+    assert 48 <= s.deal_score <= 52
+
+
+def test_asking_above_max_scores_zero():
+    """Asking above every comp → percentile 1.0 → score 0."""
+    comp = _comp(n=10, median=300.0, trimmed_median=300.0, iqr=50.0)
+    # max from helper = median * 2 = 600
+    s = compute_score(asking_price=2000.0, comp=comp)
+    assert s.percentile_rank == 1.0
+    assert s.deal_score == 0
+
+
+def test_iphone_11_overpriced_case_scores_below_50():
+    """Real case from user: iPhone 11 at $250, median asking $230.
+    Under percentile scoring: asking is slightly above median, so
+    percentile ~0.55 → score ~45. Not a unicorn (correctly), but also
+    not catastrophic — it's only slightly above peer pricing."""
     comp = _comp(n=10, median=230.0, trimmed_median=230.0, iqr=40.0)
-    breakdown = compute_score(asking_price=250.0, comp=comp)
-
-    assert 184.0 == pytest.approx(breakdown.fair_value, abs=0.01)
-    assert breakdown.ratio > 1.3
-    # Score should be in the "overpriced" band, NOT the "good deal" band.
-    assert breakdown.deal_score < 35
-    assert breakdown.deal_score > 5
-    assert breakdown.fair_value_source.startswith("trimmed_median")
+    s = compute_score(asking_price=250.0, comp=comp)
+    assert s.percentile_rank > 0.5
+    assert s.deal_score < 50
+    assert s.deal_score > 20
+    assert s.fair_value_source.startswith("trimmed_median")
 
 
-# --- Score curve sanity --------------------------------------------------
-
-def test_curve_unicorn_deal_scores_100_with_high_confidence():
-    # asking $80, fair $200 → ratio 0.4. Need n>=12 with tight IQR
-    # for confidence to be "high" (±5), which keeps cap at 95.
-    comp = _comp(n=15, median=250.0, trimmed_median=250.0, iqr=20.0)
-    s = compute_score(asking_price=80.0, comp=comp)
-    assert s.deal_score >= 95
-    assert s.confidence_label == "high"
-
-
-def test_curve_neutral_at_one_to_one():
-    # Want fair_value = asking. fair = trimmed_median * 0.8, so we need
-    # trimmed_median = asking / 0.8 = 250.
-    comp = _comp(n=10, median=250.0, trimmed_median=250.0)
-    s = compute_score(asking_price=200.0, comp=comp)
-    assert 48 <= s.deal_score <= 52  # near 50
-
-
-def test_curve_overpriced_scores_low():
-    comp = _comp(n=10, median=200.0, trimmed_median=200.0)  # fair=160
-    s = compute_score(asking_price=300.0, comp=comp)  # ratio ~1.875
-    assert s.deal_score <= 10
-
-
-def test_curve_is_monotonic_in_ratio():
-    """Score should never increase as asking price increases (with comps fixed)."""
-    comp = _comp(n=10, median=250.0, trimmed_median=250.0)
+def test_score_is_monotonic_in_asking_price():
+    """Score should never increase as asking increases (comps fixed).
+    Percentile rank is monotonic, so the score must be too."""
+    comp = _comp(n=10, median=250.0, trimmed_median=250.0, iqr=40.0)
     asking_prices = [50, 100, 150, 200, 250, 300, 400, 500]
     scores = [
         compute_score(asking_price=p, comp=comp).deal_score
@@ -109,33 +111,40 @@ def test_score_is_deterministic():
     assert a.ratio == b.ratio
 
 
-# --- Fair-value source selection ----------------------------------------
+# --- Unscoreable behavior (formula v3.0: refuse rather than guess) ------
 
 def test_uses_trimmed_median_when_sample_is_sufficient():
     comp = _comp(n=10, median=200.0, trimmed_median=180.0)
-    s = compute_score(asking_price=150.0, comp=comp, fair_value_from_llm=999.0)
-    # Should ignore the LLM since we have enough comps.
+    s = compute_score(asking_price=150.0, comp=comp)
+    assert s.unscoreable is False
     assert s.fair_value_source.startswith("trimmed_median")
     assert s.fair_value == pytest.approx(180.0 * (1 - DEFAULT_ASKING_DISCOUNT))
 
 
-def test_falls_back_to_llm_when_sparse():
+def test_unscoreable_when_comps_too_sparse():
+    """Below MIN_COMPS_TO_SCORE, refuse to score — don't invent a number."""
+    from deal_finder.appraisal.formula import MIN_COMPS_TO_SCORE
+    comp = _comp(n=MIN_COMPS_TO_SCORE - 1, median=200.0, trimmed_median=200.0)
+    s = compute_score(asking_price=150.0, comp=comp)
+    assert s.unscoreable is True
+    assert s.deal_score is None
+    assert s.unscoreable_reason is not None
+    assert "insufficient" in s.unscoreable_reason.lower()
+
+
+def test_unscoreable_ignores_llm_param():
+    """Even if a fair_value_from_llm is passed, sparse comps -> unscoreable.
+    Formula v3.0 no longer falls back to the LLM."""
     comp = _comp(n=2, median=200.0, trimmed_median=200.0)
     s = compute_score(asking_price=150.0, comp=comp, fair_value_from_llm=170.0)
-    assert s.fair_value_source == "llm"
-    assert s.fair_value == 170.0
+    assert s.unscoreable is True
 
 
-def test_falls_back_to_raw_median_when_no_llm_and_sparse():
-    comp = _comp(n=2, median=200.0, trimmed_median=200.0)
-    s = compute_score(asking_price=150.0, comp=comp, fair_value_from_llm=None)
-    assert s.fair_value_source.startswith("raw_median")
-
-
-def test_no_data_at_all_raises():
+def test_unscoreable_when_no_data_at_all():
     comp = CompStats(search_term="x", source="marketplace", sample_size=0)
-    with pytest.raises(ValueError):
-        compute_score(asking_price=100.0, comp=comp, fair_value_from_llm=None)
+    s = compute_score(asking_price=100.0, comp=comp)
+    assert s.unscoreable is True
+    assert s.deal_score is None
 
 
 def test_zero_asking_price_raises():
@@ -176,42 +185,34 @@ def test_high_iqr_lowers_confidence():
     assert s_wide.confidence_pm > s_tight.confidence_pm
 
 
-def test_llm_fallback_is_low_confidence():
-    comp = _comp(n=2)
-    s = compute_score(asking_price=150.0, comp=comp, fair_value_from_llm=170.0)
-    assert s.confidence_label == "low"
+def test_unscoreable_below_threshold_remains_unscored():
+    """Old 'GE AC motor' case (3 comps): now unscoreable, no number."""
+    from deal_finder.appraisal.formula import MIN_COMPS_TO_SCORE
+    comp = _comp(n=MIN_COMPS_TO_SCORE - 2, median=47.5,
+                 trimmed_median=47.5, iqr=20.0)
+    s = compute_score(asking_price=15.0, comp=comp)
+    assert s.unscoreable is True
+    assert s.deal_score is None
 
 
 # --- Confidence cap on the score ----------------------------------------
 
-def test_score_capped_by_confidence_on_niche_item():
-    """The 'GE AC motor' case: $15 asking, $38 fair, ratio 0.39 — raw
-    curve says 100. But with only 3 comps (low confidence, ±18) the
-    cap is 100 - 18 = 82. Score should be 82, not 100."""
-    comp = _comp(n=3, median=47.5, trimmed_median=47.5, iqr=20.0)
-    s = compute_score(asking_price=15.0, comp=comp, fair_value_from_llm=38.0)
-    assert s.confidence_label == "low"
-    assert s.deal_score <= 100 - s.confidence_pm
-    assert s.deal_score >= 70  # still recognized as a good deal
-
-
 def test_high_confidence_does_not_cap_legitimate_unicorns():
-    """Plenty of tight comps + truly amazing ratio should still score 100."""
+    """Plenty of tight comps + asking well below the range — should
+    score near max (capped only by ±5 high-confidence interval)."""
     comp = _comp(n=14, median=400.0, trimmed_median=400.0, iqr=40.0)
+    # _comp helper sets min = median * 0.5 = 200; asking $120 < min.
     s = compute_score(asking_price=120.0, comp=comp)
-    # ratio 0.375 -> raw score 100; high confidence -> ±5 cap is 95.
-    # That's still capped, but only slightly.
+    assert s.unscoreable is False
     assert s.deal_score >= 95
     assert s.confidence_label == "high"
 
 
-def test_cap_does_not_inflate_low_scores():
-    """Cap only applies when raw_score > confidence_cap. A score of
-    30 stays 30 even with low confidence."""
-    comp = _comp(n=3, median=200.0, trimmed_median=200.0, iqr=80.0)
-    s = compute_score(asking_price=300.0, comp=comp, fair_value_from_llm=200.0)
-    # asking $300 / fair $200 = ratio 1.5 -> raw_score ~15
-    # cap is 100 - 18 = 82. min(15, 82) = 15.
+def test_cap_does_not_inflate_low_scores_when_scoreable():
+    """An overpriced asking still scores low when comps are sufficient."""
+    comp = _comp(n=10, median=200.0, trimmed_median=200.0, iqr=80.0)
+    s = compute_score(asking_price=500.0, comp=comp)
+    assert s.unscoreable is False
     assert s.deal_score < 30
 
 

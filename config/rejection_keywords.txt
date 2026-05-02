@@ -2,9 +2,22 @@
 # Lines starting with # and blank lines are ignored.
 # Note: "free" is intentionally absent — free listings are scored normally
 # (handled by the price extraction layer).
+
+# Items unsuitable for scoring (parts, lots, broken)
 curb alert
 lot
 bundle
 parts only
 for parts
 not working
+
+# Service listings (someone offering labor, not selling an item)
+installation service
+repair service
+mobile detail
+mobile mechanic
+detailing service
+tuning service
+tutoring
+lessons
+appointment booking

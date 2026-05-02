@@ -1,5 +1,7 @@
 # One regex per line. Matched (case-insensitive) against title + " " + description.
 # Lines starting with # and blank lines are ignored.
+
+# Trade / wanted posts (not selling, asking)
 \btrades?\b
 \bswap\b
 \bISO\b
@@ -7,3 +9,13 @@
 \bwanted\b
 \bwill trade\b
 \bpartial trade\b
+
+# Service listings (someone offering labor, not selling an item)
+\b(I|we)\s+(do|offer|provide|install|mount|repair|detail)\b
+\binstallation\s+(service|available|included)\b
+\b(mobile|on[\s-]?site)\s+(repair|service)\b
+\b(rates?|pricing)\s+start(s|ing)?\s+(at|from)\b
+\b(per\s+hour|hourly\s+rate|/\s*hr)\b
+\bbook\s+(your|an)\s+appointment\b
+\bcall\s+for\s+(quote|pricing)\b
+\bDM\s+for\s+(rates?|pricing|quote)\b

@@ -61,6 +61,7 @@ class ProcessedListing:
     seller_type: str | None
     listed_at_unix: int | None
     detail_source: str | None
+    category_id: str | None = None
     detail_errors: list[str] = field(default_factory=list)
 
     # From price extraction
@@ -131,6 +132,7 @@ def _combine(sl: SearchListing, detail: Detail | None) -> ProcessedListing:
         previous_price=sl.previous_price,
         seller_location=sl.seller_location,
         price_formatted=sl.price_formatted,
+        category_id=sl.category_id,
         # Detail side
         description=description,
         seller_name=detail.seller_name if detail else None,

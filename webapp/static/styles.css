@@ -518,6 +518,48 @@ a:hover { color: var(--accent); }
     font-size: 11px;
 }
 
+/* ---------- Unscoreable state ---------- */
+
+.unscoreable-display {
+    background: rgba(120, 120, 130, 0.05);
+    border: 1px dashed var(--border-strong);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-radius: var(--radius);
+}
+
+.unscoreable-headline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.unscoreable-icon {
+    font-size: 22px;
+    color: var(--fg-dim);
+    font-weight: 300;
+    line-height: 1;
+}
+
+.unscoreable-title {
+    font-weight: 600;
+    color: var(--fg);
+    font-size: 13px;
+}
+
+.unscoreable-reason {
+    font-size: 11px;
+    color: var(--fg-muted);
+    line-height: 1.4;
+}
+
+.unscoreable-stats {
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+}
+
 .math-eq strong {
     color: var(--fg);
     font-weight: 700;

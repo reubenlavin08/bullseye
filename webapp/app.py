@@ -354,11 +354,15 @@ def appraise(listing_id: str):
     # 4) Run comps
     try:
         search_term = normalize_title(pl.title) or pl.title
+        # Use the normalized title for both keyword search AND embedding
+        # similarity — descriptions add noise that drags cosine scores down.
         comp = get_comps(
             search_term=search_term,
             lat=49.2827, lng=-123.1207, radius_km=1500,
             exclude_listing_id=listing_id,
             asking_price=pl.resolved_price,
+            target_text=search_term,
+            category_id=getattr(pl, "category_id", None),
         )
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"comp fetch: {e}"}), 502

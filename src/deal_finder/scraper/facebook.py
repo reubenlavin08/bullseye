@@ -59,7 +59,13 @@ DEFAULT_HEADERS: dict[str, str] = {
 
 @dataclass(frozen=True)
 class SearchParams:
-    """Inputs to one search request."""
+    """Inputs to one search request.
+
+    `category_id` (optional) restricts results to a specific Marketplace
+    category — critical for comp lookups so a Honda Civic search doesn't
+    pull dash-cam listings. Captured per-listing as
+    `marketplace_listing_category_id` and threaded through.
+    """
     keyword: str
     lat: float
     lng: float
@@ -68,6 +74,7 @@ class SearchParams:
     price_max: int | None = None
     last_24h_only: bool = False
     cursor: str | None = None
+    category_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,7 @@ class SearchListing:
     photo_url: str | None
     seller_location: str | None
     listing_url: str
+    category_id: str | None = None
 
 
 @dataclass
@@ -173,6 +181,10 @@ class FacebookSearchClient:
             browse["filter_price_upper_bound"] = p.price_max
         if p.last_24h_only:
             browse["commerce_search_and_rp_ctime_days"] = "19062;19061"
+        if p.category_id:
+            # Restrict comps/searches to one Marketplace category. Without
+            # this a "Honda Civic 2015" search returns dash-cam comps.
+            browse["filter_category_id"] = str(p.category_id)
 
         variables: dict[str, Any] = {
             "params": {
@@ -368,7 +380,13 @@ def _node_to_listing(node: Any) -> SearchListing | None:
             or _safe_get(listing, "location", "reverse_geocode", "city")
         ),
         listing_url=f"https://www.facebook.com/marketplace/item/{listing_id}/",
+        category_id=_safe_get_str(listing, "marketplace_listing_category_id"),
     )
+
+
+def _safe_get_str(d, key) -> str | None:
+    v = d.get(key) if isinstance(d, dict) else None
+    return str(v) if v is not None else None
 
 
 def _safe_get(d: Any, *keys: str, default: Any = None) -> Any:

@@ -167,11 +167,43 @@
     }
 
     function renderFreshAppraisal(container, data) {
+        const bd = data.breakdown || {};
+
+        // Unscoreable path: refuse to fake a number.
+        if (bd.unscoreable) {
+            const term = data.search_term || "";
+            container.innerHTML =
+                '<div class="appraisal-display unscoreable-display">' +
+                '<div class="unscoreable-headline">' +
+                    '<span class="unscoreable-icon">∅</span>' +
+                    '<span class="unscoreable-title">Not enough data to score</span>' +
+                '</div>' +
+                '<div class="unscoreable-reason">' + escapeHtml(bd.unscoreable_reason || "") + '</div>' +
+                (bd.median ?
+                    '<div class="unscoreable-stats muted">' +
+                        (bd.sample_size || 0) + ' comp(s) found · median $' + Math.round(bd.median) +
+                        (bd.iqr ? ' · IQR $' + Math.round(bd.iqr) : '') +
+                    '</div>'
+                : '') +
+                (term && bd.sample_size ?
+                    '<button class="comps-toggle muted" type="button" ' +
+                        'data-comp-term="' + escapeHtml(term) + '" ' +
+                        'data-comp-source="marketplace" ' +
+                        'title="See the comps we did find">' +
+                        'See ' + bd.sample_size + ' comp(s) ▾</button>' +
+                    '<div class="comps-pane" hidden>' +
+                        '<div class="comps-spinner" hidden>loading…</div>' +
+                        '<div class="comps-content"></div>' +
+                    '</div>'
+                : '') +
+                '</div>';
+            return;
+        }
+
         const score = data.deal_score;
         const klass = score >= 70 ? "score-high"
                     : score >= 50 ? "score-mid" : "score-low";
         const ratio = data.ratio || 0;
-        const bd = data.breakdown || {};
         const asking = bd.asking_price;
         const fair = data.fair_value;
         const conf = data.confidence || bd.confidence_label;

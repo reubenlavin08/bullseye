@@ -131,8 +131,34 @@
                                     </div>
                                 {% endif %}
 
-                                {% if r.deal_score is not none %}
-                                    {% set bd = r.appraisal_breakdown %}
+                                {% set bd = r.appraisal_breakdown %}
+                                {% if bd and bd.unscoreable %}
+                                    <div class="appraisal-display unscoreable-display">
+                                        <div class="unscoreable-headline">
+                                            <span class="unscoreable-icon">∅</span>
+                                            <span class="unscoreable-title">Not enough data to score</span>
+                                        </div>
+                                        <div class="unscoreable-reason">{{ bd.unscoreable_reason }}</div>
+                                        {% if bd.median %}
+                                            <div class="unscoreable-stats muted">
+                                                {{ bd.sample_size }} comp(s) found · median ${{ '%.0f'|format(bd.median) }}{% if bd.iqr %} · IQR ${{ '%.0f'|format(bd.iqr) }}{% endif %}
+                                            </div>
+                                        {% endif %}
+                                        {% if r.comp_search_term %}
+                                            <button class="comps-toggle muted"
+                                                    type="button"
+                                                    data-comp-term="{{ r.comp_search_term }}"
+                                                    data-comp-source="{{ r.comp_source or 'marketplace' }}"
+                                                    title="See the comps we did find">
+                                                See {{ bd.sample_size }} comp(s) ▾
+                                            </button>
+                                            <div class="comps-pane" hidden>
+                                                <div class="comps-spinner" hidden>loading…</div>
+                                                <div class="comps-content"></div>
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                {% elif r.deal_score is not none %}
                                     <div class="appraisal-display
                                                 {% if bd and bd.data_quality_poor %}score-low
                                                 {% elif r.deal_score >= 70 %}score-high

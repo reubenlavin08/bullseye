@@ -6,30 +6,40 @@ the trust UI can render.
 
 Design choices baked in:
 
-1. Asking-vs-sold discount (default 20%)
-   Marketplace asking prices typically run 15-30% above what items
-   actually sell for. We anchor `fair_value` on the trimmed comp
-   median, then apply this discount. Calibrated from public estimates;
-   easy to retune as we collect real sale data.
+1. Score = percentile rank of the listing in the comp asking distribution
+   "Cheaper than X% of similar listings" → score X.
+   Score 80 means asking sits at the 20th percentile of the comp set.
+   Score 50 means asking sits near the median.
+   Score 20 means asking sits at the 80th percentile (overpriced relative
+   to the peer set).
+   This is the most direct, statistically defensible meaning for a
+   "deal score" — it doesn't require us to estimate any latent
+   "fair value" number.
 
-2. Outlier handling
-   The scorer uses `trimmed_median` from CompStats (Tukey fences).
-   See `db.comps._compute_stats` for the trim policy.
+2. Fair value (kept as a SEPARATE display field, not part of score)
+   We still estimate fair_value = trimmed_median × 0.80 because users
+   want to know "what should I actually offer / pay." This is the
+   asking-vs-sold discount: Marketplace asks typically run 15-30%
+   above true sale prices.
+   But fair_value no longer drives the score — percentile does.
+   This fixes the "iPhone 15 at \$430 only scored 50 because the
+   discount pushed fair value to \$432 and asking was right at it"
+   problem. Now the score reflects "are you paying less than your
+   peers" rather than "are you paying less than our derived number."
 
-3. Score curve
-   Piecewise-linear function of `ratio = asking / fair_value`.
-   - ratio = 0.4 -> score 100  (half-off+ unicorn)
-   - ratio = 0.7 -> score 75   (good deal)
-   - ratio = 1.0 -> score 50   (asking = fair value, neutral)
-   - ratio = 1.3 -> score 25   (overpriced)
-   - ratio = 1.7 -> score 5    (very overpriced)
-   Smooth between breakpoints; clamped to [0, 100].
+3. Confidence cap
+   Score is capped at (100 - confidence_pm) — we never claim a deal
+   score higher than the upper bound of the confidence interval.
 
-4. Confidence interval
-   Score uncertainty is widened when:
-   - sample_size is small
-   - IQR is wide relative to the median (high variance)
-   - We had to fall back to LLM-only fair_value (no comps)
+4. Outlier handling
+   The percentile rank uses the full comp distribution (Tukey fences
+   inform `trimmed_median` for fair_value display, but percentile
+   rank uses the full sample).
+
+5. Bimodal cluster detection
+   Upstream of this module — see db/comps._maybe_split_bimodal.
+   By the time prices reach this formula they should already be
+   from a coherent cluster.
 """
 from __future__ import annotations
 
@@ -64,14 +74,18 @@ SCORE_CURVE: tuple[tuple[float, float], ...] = (
 @dataclass
 class ScoreBreakdown:
     """Full reproducible breakdown of one score. Persisted as JSON in
-    `listings.appraisal_breakdown` so any past score can be re-derived."""
+    `listings.appraisal_breakdown` so any past score can be re-derived.
+
+    Note: when `unscoreable` is True the other numeric fields may be
+    None or zero — caller should branch on `unscoreable` first.
+    """
     asking_price: float
-    fair_value: float
-    fair_value_source: str       # "trimmed_median*0.8" | "llm" | "raw_median*0.8"
-    ratio: float                  # asking / fair_value
-    deal_score: int               # 0-100, after curve mapping
+    fair_value: float | None
+    fair_value_source: str       # "trimmed_median*0.8" | "raw_median*0.8" | "none"
+    ratio: float | None           # asking / fair_value
+    deal_score: int | None        # 0-100, or None when unscoreable
     confidence_pm: int            # ± width on the score
-    confidence_label: str         # "high" | "medium" | "low"
+    confidence_label: str         # "high" | "medium" | "low" | "none"
     sample_size: int
     trimmed_sample_size: int | None
     outliers_dropped: int
@@ -81,16 +95,25 @@ class ScoreBreakdown:
     asking_discount: float
     # Data-quality flag for heterogeneous comp sets ("vintage X" cases
     # where every unit is unique). True when IQR > median, meaning the
-    # comp distribution is too dispersed for a single deal-score number
-    # to be meaningful. The score is still computed but the UI should
-    # surface percentile_rank as the primary metric instead.
+    # comp distribution is too dispersed for the score to be reliable.
     data_quality_poor: bool = False
     iqr_to_median_ratio: float | None = None
     # Percentile rank of `asking_price` within the comp set. 0.0 = cheaper
-    # than every comp; 1.0 = more expensive than every comp. More useful
-    # than deal_score for heterogeneous categories.
+    # than every comp; 1.0 = more expensive than every comp. As of v2.0
+    # this is the PRIMARY driver of deal_score.
     percentile_rank: float | None = None
-    formula_version: str = "1.1"
+    # When True, we refused to score this listing because comp data was
+    # insufficient. UI should show "not enough comparable data" rather
+    # than a misleading score. As of v3.0 we no longer fall back to
+    # LLM hallucinations for fair_value when comps are sparse.
+    unscoreable: bool = False
+    unscoreable_reason: str | None = None
+    formula_version: str = "3.0"
+
+
+# Minimum comps required to trust the percentile rank. Below this we
+# refuse to score rather than make stuff up.
+MIN_COMPS_TO_SCORE = 5
 
 
 # IQR / median above this threshold flags the comp set as too varied
@@ -110,60 +133,74 @@ def compute_score(
 ) -> ScoreBreakdown:
     """Compute the deterministic deal score for a listing.
 
-    `fair_value_from_llm` is only consulted when comps are too sparse
-    to anchor on (sample_size < LLM_FALLBACK_THRESHOLD). When comps are
-    sufficient, the score is purely a function of the comp stats and
-    the asking price.
+    Refuses to score (returns ScoreBreakdown with unscoreable=True)
+    when comp data is insufficient. As of formula v3.0 we no longer
+    fall back to LLM-hallucinated fair_values — better to admit "not
+    enough data" than to invent a number.
 
-    Returns a ScoreBreakdown with full provenance. Raises ValueError on
-    nonsensical inputs (asking_price <= 0, no comps AND no LLM estimate).
+    `fair_value_from_llm` is accepted for backwards compatibility but
+    not used to score; if provided, it'll be reflected in the breakdown
+    for transparency only.
+
+    Raises ValueError on nonsensical inputs (asking_price <= 0).
     """
     if asking_price <= 0:
         raise ValueError(
             f"asking_price must be positive (got {asking_price})"
         )
 
+    # Refuse to score with insufficient sample.
+    effective_n = comp.trimmed_sample_size or comp.sample_size
+    if effective_n < MIN_COMPS_TO_SCORE:
+        return _unscoreable(
+            asking_price=asking_price,
+            comp=comp,
+            asking_discount=asking_discount,
+            reason=(
+                f"insufficient comparable listings "
+                f"(found {comp.sample_size}, need {MIN_COMPS_TO_SCORE}+)"
+            ),
+        )
+
+    # We have enough comps. fair_value is purely statistical now —
+    # trimmed_median × asking-vs-sold discount. No LLM in this path.
     fair_value, source = _resolve_fair_value(
         comp=comp,
-        fair_value_from_llm=fair_value_from_llm,
         asking_discount=asking_discount,
     )
     if fair_value is None or fair_value <= 0:
-        raise ValueError("could not estimate a positive fair_value")
+        return _unscoreable(
+            asking_price=asking_price,
+            comp=comp,
+            asking_discount=asking_discount,
+            reason="could not derive a positive fair value from comps",
+        )
 
     ratio = asking_price / fair_value
-    raw_score = _curve(ratio, SCORE_CURVE)
+
+    # Percentile rank of asking inside the comp asking distribution —
+    # the score driver.
+    pct_rank = _percentile_rank(asking_price, comp)
+    if pct_rank is None:
+        return _unscoreable(
+            asking_price=asking_price, comp=comp,
+            asking_discount=asking_discount,
+            reason="comp distribution too narrow to rank",
+        )
 
     confidence_pm, confidence_label = _confidence(comp, source)
 
-    # Cap the score by confidence — we can never claim a deal score
-    # higher than `100 - confidence_pm` because that's the upper bound
-    # of the confidence interval. Saying "100 ±18" implies the real
-    # score could be as low as 82, so we report 82 instead. This is
-    # how statisticians report uncertain estimates: stay inside the
-    # interval. Keeps the system honest on niche items where comp
-    # sample is thin (a $15 part with ratio 0.4 won't score 100 if
-    # we only had 3 comps to work from).
+    raw_score = (1 - pct_rank) * 100
     confidence_cap = 100 - confidence_pm
     capped = min(raw_score, confidence_cap)
     deal_score = max(0, min(100, int(round(capped))))
 
-    # Data-quality flag: when IQR > median, the comp set is too
-    # heterogeneous for a single number to mean much. Common for
-    # genuine vintage / custom / collector categories. We compute the
-    # score anyway (statistically valid) but flag it so the UI can
-    # downplay the score and lead with percentile rank instead.
     iqr_ratio = None
     data_quality_poor = False
     if comp.iqr is not None and comp.trimmed_median:
         iqr_ratio = comp.iqr / comp.trimmed_median
         if iqr_ratio > DATA_QUALITY_IQR_THRESHOLD:
             data_quality_poor = True
-
-    # Percentile rank of asking inside the comp distribution.
-    pct_rank = None
-    if comp.median is not None and comp.sample_size > 0:
-        pct_rank = _percentile_rank(asking_price, comp)
 
     return ScoreBreakdown(
         asking_price=asking_price,
@@ -183,6 +220,57 @@ def compute_score(
         data_quality_poor=data_quality_poor,
         iqr_to_median_ratio=iqr_ratio,
         percentile_rank=pct_rank,
+    )
+
+
+def _unscoreable(
+    *,
+    asking_price: float,
+    comp: CompStats,
+    asking_discount: float,
+    reason: str,
+) -> ScoreBreakdown:
+    """Build a ScoreBreakdown that records why we refused to score.
+
+    Some informational fields (fair_value, percentile rank) may still
+    be populated when computable, so the UI can show whatever partial
+    insight is available alongside the "not enough data" message.
+    """
+    fair_value = None
+    if comp.trimmed_median and comp.trimmed_median > 0:
+        fair_value = comp.trimmed_median * (1 - asking_discount)
+
+    pct_rank = None
+    if comp.median is not None and comp.sample_size > 0:
+        pct_rank = _percentile_rank(asking_price, comp)
+
+    iqr_ratio = None
+    data_quality_poor = False
+    if comp.iqr is not None and comp.trimmed_median:
+        iqr_ratio = comp.iqr / comp.trimmed_median
+        if iqr_ratio > DATA_QUALITY_IQR_THRESHOLD:
+            data_quality_poor = True
+
+    return ScoreBreakdown(
+        asking_price=asking_price,
+        fair_value=fair_value,
+        fair_value_source="none",
+        ratio=(asking_price / fair_value) if fair_value else None,
+        deal_score=None,
+        confidence_pm=0,
+        confidence_label="none",
+        sample_size=comp.sample_size,
+        trimmed_sample_size=comp.trimmed_sample_size,
+        outliers_dropped=comp.outliers_dropped,
+        median=comp.median,
+        trimmed_median=comp.trimmed_median,
+        iqr=comp.iqr,
+        asking_discount=asking_discount,
+        data_quality_poor=data_quality_poor,
+        iqr_to_median_ratio=iqr_ratio,
+        percentile_rank=pct_rank,
+        unscoreable=True,
+        unscoreable_reason=reason,
     )
 
 
@@ -245,17 +333,17 @@ def llm_needed(comp: CompStats) -> bool:
 def _resolve_fair_value(
     *,
     comp: CompStats,
-    fair_value_from_llm: float | None,
     asking_discount: float,
 ) -> tuple[float | None, str]:
-    """Pick the best available fair-value estimate. Returns (value, source)."""
-    if comp.sample_size >= LLM_FALLBACK_THRESHOLD and \
-       comp.trimmed_median is not None:
+    """Pick the best statistical fair-value estimate from comps.
+
+    Prefers trimmed_median (post-outlier-trim, post-cluster-split) over
+    raw median. Both apply the asking-vs-sold discount. No LLM path
+    here — caller has already verified comp count is sufficient.
+    """
+    if comp.trimmed_median is not None:
         return comp.trimmed_median * (1 - asking_discount), \
                f"trimmed_median*{1-asking_discount:.2f}"
-
-    if fair_value_from_llm is not None and fair_value_from_llm > 0:
-        return float(fair_value_from_llm), "llm"
 
     if comp.median is not None and comp.sample_size > 0:
         return comp.median * (1 - asking_discount), \

@@ -27,8 +27,13 @@ from .ollama_client import OllamaClient, get_default_client
 logger = logging.getLogger(__name__)
 
 
+# Defaults to the same 3B model used for normalization + price extraction.
+# The fair_value estimation only fires as a fallback when comp sample is
+# sparse (n<5), so the 3B's lower reasoning ceiling is acceptable here —
+# we already mark those appraisals as low-confidence. Single resident
+# model = much less VRAM pressure on small-GPU systems.
 DEFAULT_MODEL = os.environ.get(
-    "OLLAMA_APPRAISAL_MODEL", "qwen2.5:7b-instruct-q4_K_M",
+    "OLLAMA_APPRAISAL_MODEL", "llama3.2:3b-instruct-q4_K_M",
 )
 
 

@@ -6,16 +6,19 @@ the listing's title (or a normalized version) as the query, take the
 asking prices that come back, and write them to the `comps` table for
 the appraisal worker to read.
 
-Caveats — important for the LLM appraisal prompt later:
-  * These are ASKING prices, not SOLD. Asking is typically inflated by
-    15-30% over what items actually sell for.
+Filtering pipeline (in order):
+  1. Drop the listing being scored from its own comp set (by ID).
+  2. For $0/$1 placeholder comps, attempt JIT detail-fetch + price
+     recovery (regex first, LLM fallback). Up to PLACEHOLDER_RECOVERY_BUDGET
+     per lookup. Comps with unrecoverable prices are dropped.
+  3. (Optional, when target_text is provided) embed comps + target via
+     nomic-embed-text and drop comps below the similarity threshold.
+     Falls back to no filtering if embeddings unavailable.
+
+Caveats:
+  * These are ASKING prices, not SOLD. The appraisal formula applies
+    a ~20% asking-vs-sold discount before scoring.
   * Comp set size is whatever the search returns — usually ~24 items.
-  * Filtering: we drop the listing being scored from its own comp set
-    (matching by ID).
-  * For $0/$1 placeholder comps, we attempt JIT detail-fetch +
-    price recovery (regex first, then LLM fallback). Up to
-    PLACEHOLDER_RECOVERY_BUDGET per comp lookup, to bound latency.
-    Anything that still has no price after recovery is dropped.
 
 Once eBay is approved, a sister module `comps/ebay.py` will fetch sold
 prices into the same table with `source='ebay'` and the appraisal layer
@@ -57,17 +60,25 @@ def get_comps(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     force_refresh: bool = False,
     asking_price: float | None = None,
+    target_text: str | None = None,
+    use_embedding_filter: bool = False,
+    category_id: str | None = None,
 ) -> CompStats:
     """Get comps for a search term, fetching from FB if cache is stale.
+
+    Optional semantic filtering:
+      target_text      -- the title (or title+description) of the listing
+                          being scored. Used to compute cosine similarity
+                          to each comp; comps below threshold are dropped.
+      use_embedding_filter -- master switch (e.g. tests can disable).
 
     `asking_price` enables bimodal-cluster filtering: when comps split
     into a cheap-cluster and expensive-cluster (e.g. "boat motor" hits
     both trolling motors and outboards), we keep the cluster closest
-    to the asking price. See db.comps._maybe_split_bimodal.
+    to the asking price.
 
-    Returns a CompStats with median/mean/etc. Even if the fetch fails
-    we return a CompStats (with fresh=False, sample_size=0) so the caller
-    has a consistent shape to handle.
+    Returns a CompStats. Embedding-based filtering is annotated on the
+    returned object via `embedding_filter_applied` etc. (see CompStats).
     """
     with get_conn() as conn:
         if not force_refresh:
@@ -75,6 +86,7 @@ def get_comps(
                 conn, search_term, SOURCE,
                 ttl_seconds=ttl_seconds,
                 asking_price=asking_price,
+                target_text=target_text if use_embedding_filter else None,
             )
             if cached.fresh and cached.sample_size > 0:
                 logger.debug(
@@ -88,6 +100,7 @@ def get_comps(
         search_term=search_term,
         lat=lat, lng=lng, radius_km=radius_km,
         exclude_listing_id=exclude_listing_id,
+        category_id=category_id,
     )
 
     with get_conn() as conn:
@@ -98,12 +111,16 @@ def get_comps(
                 conn, search_term, SOURCE,
                 ttl_seconds=ttl_seconds,
                 asking_price=asking_price,
+                target_text=target_text if use_embedding_filter else None,
             )
 
     logger.info(
-        "comp refetch term=%r inserted=%d sample=%d median=%s",
+        "comp refetch term=%r inserted=%d sample=%d median=%s "
+        "embed_filter=%s kept=%s",
         search_term, inserted, stats.sample_size,
         f"{stats.median:.2f}" if stats.median else "n/a",
+        stats.embedding_filter_applied,
+        stats.embedding_kept_count,
     )
     return stats
 
@@ -115,6 +132,7 @@ def _fetch_observations(
     lng: float,
     radius_km: int,
     exclude_listing_id: str | None,
+    category_id: str | None = None,
 ) -> list[CompObservation]:
     """Run a Marketplace search and convert the listings into comp observations.
 
@@ -125,6 +143,7 @@ def _fetch_observations(
     page = get_search_client().search(SearchParams(
         keyword=search_term,
         lat=lat, lng=lng, radius_km=radius_km,
+        category_id=category_id,
     ))
 
     out: list[CompObservation] = []

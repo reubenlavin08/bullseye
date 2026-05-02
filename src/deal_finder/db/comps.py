@@ -64,6 +64,10 @@ class CompStats:
     trimmed_median: float | None = None
     trimmed_mean: float | None = None
     outliers_dropped: int = 0
+    # Embedding-based semantic filtering provenance
+    embedding_filter_applied: bool = False
+    embedding_kept_count: int | None = None
+    embedding_threshold: float | None = None
     # Provenance
     fetched_at: datetime | None = None
     fresh: bool = False  # True if within TTL
@@ -112,6 +116,7 @@ def fetch_stats(
     *,
     ttl_seconds: int = 12 * 3600,
     asking_price: float | None = None,
+    target_text: str | None = None,
 ) -> CompStats:
     """Aggregate fresh observations within the TTL window.
 
@@ -137,29 +142,73 @@ def fetch_stats(
             search_term=search_term, source=source, sample_size=0, fresh=False,
         )
 
+    # Pull prices + titles so the embedding filter has text to work with.
     with conn.cursor() as cur:
         cur.execute(
-            """SELECT price FROM comps
+            """SELECT price, title FROM comps
                WHERE search_term = %s
                  AND source = %s
                  AND fetched_at >= NOW() - INTERVAL '%s seconds'""",
             (search_term, source, ttl_seconds),
         )
-        prices = [r[0] for r in cur.fetchall() if r[0] is not None]
+        rows = [(r[0], r[1]) for r in cur.fetchall() if r[0] is not None]
 
-    if not prices:
+    if not rows:
         return CompStats(
             search_term=search_term, source=source, sample_size=0,
             fetched_at=meta["last_fetched"], fresh=False,
         )
 
-    return _compute_stats(
+    prices = [r[0] for r in rows]
+    titles = [r[1] or "" for r in rows]
+    raw_sample_size = len(prices)
+
+    # Semantic filter: drop comps whose title doesn't match the target.
+    # If the filter is too aggressive (only 0-2 comps survive), we DO
+    # NOT fall back to the unfiltered set — that would let dashcams
+    # score against cars. Instead we keep the filtered set as-is,
+    # and downstream `compute_score` will mark the listing unscoreable
+    # because there aren't enough comps to anchor on.
+    embedding_applied = False
+    embedding_kept = None
+    embedding_threshold = None
+    if target_text and target_text.strip():
+        from ..appraisal.embeddings import (
+            DEFAULT_SIMILARITY_THRESHOLD,
+            filter_comps_by_similarity,
+        )
+        result = filter_comps_by_similarity(target_text, titles)
+        embedding_threshold = result.threshold
+        embedding_kept = len(result.kept)
+        if result.kept:
+            embedding_applied = True
+            prices = [prices[i] for i in result.kept]
+        else:
+            # No comp survived the filter at all. Return empty stats —
+            # compute_score will see sample_size=0 and mark unscoreable.
+            embedding_applied = True
+            prices = []
+
+    if not prices:
+        return CompStats(
+            search_term=search_term, source=source, sample_size=0,
+            fetched_at=meta["last_fetched"], fresh=True,
+            embedding_filter_applied=embedding_applied,
+            embedding_kept_count=embedding_kept,
+            embedding_threshold=embedding_threshold,
+        )
+
+    stats = _compute_stats(
         prices=prices,
         search_term=search_term,
         source=source,
         fetched_at=meta["last_fetched"],
         asking_price=asking_price,
     )
+    stats.embedding_filter_applied = embedding_applied
+    stats.embedding_kept_count = embedding_kept
+    stats.embedding_threshold = embedding_threshold
+    return stats
 
 
 def _compute_stats(
