@@ -50,6 +50,95 @@
 
     // --- 1 + 2: summary (status strip + funnel) -----------------------
 
+    // --- Poll timer (the prominent "next attempt in X" widget) -----------
+    //
+    // Data lives on /api/dashboard/summary as data.poll_timer. The summary
+    // endpoint is hit every 5s. Between resyncs we tick the countdown
+    // down once a second locally so it feels alive.
+    let pollTimerData = null;
+    let pollTimerLastSync = 0;
+
+    function formatCountdown(s) {
+        if (s <= 0) return "now";
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        if (m > 0) return `${m}m ${String(r).padStart(2, "0")}s`;
+        return `${r}s`;
+    }
+
+    function renderPollTimer() {
+        if (!pollTimerData) return;
+        const t = pollTimerData;
+
+        // Local-tick: subtract elapsed seconds since the last server resync.
+        const elapsed = Math.floor((Date.now() - pollTimerLastSync) / 1000);
+        const remaining = Math.max(0, t.next_attempt_in_s - elapsed);
+
+        const block = document.getElementById("poll-timer-block");
+        const wrap  = block.querySelector(".poll-timer");
+        const icon  = document.getElementById("poll-timer-icon");
+        const state = document.getElementById("poll-timer-state");
+        const detail= document.getElementById("poll-timer-detail");
+        const countdown = document.getElementById("poll-timer-countdown");
+        const bar   = document.getElementById("poll-timer-bar");
+
+        // State styling. The block's data-state drives the CSS color band.
+        wrap.dataset.state = t.state;
+
+        let label, glyph, detailText;
+        switch (t.state) {
+            case "cooldown": {
+                glyph = "⏸";
+                const cd = t.cooldown || {};
+                label = "RATE-LIMIT COOLDOWN";
+                detailText =
+                    `${cd.rate_limits_in_window} rate-limits in last ${cd.window_minutes}m → ` +
+                    `cooldown ${cd.total_s}s · ${cd.remaining_s}s left when last synced`;
+                break;
+            }
+            case "slow_start": {
+                glyph = "◷";
+                const ss = t.slow_start || {};
+                label = "SLOW-START GATE";
+                detailText =
+                    `effective interval ${ss.min_interval_s}s · ` +
+                    `${ss.elapsed_since_last_attempt_s}s since last attempt · ` +
+                    `floor ${ss.floor_s}s, initial ${ss.initial_s}s`;
+                break;
+            }
+            case "tick": {
+                glyph = "▸";
+                label = "READY · WAITING FOR NEXT TICK";
+                detailText =
+                    `coordinator tick every ${t.coordinator_tick_s}s · ` +
+                    (t.last_attempt_iso
+                        ? `last attempt ${timeAgo(t.last_attempt_iso)}`
+                        : "no attempts yet this run");
+                break;
+            }
+            default: {
+                glyph = "·";
+                label = "IDLE";
+                detailText = "no recent poll activity";
+            }
+        }
+
+        icon.textContent = glyph;
+        state.textContent = label;
+        detail.textContent = detailText;
+        countdown.textContent = formatCountdown(remaining);
+
+        // Progress bar — fills from 0% to 100% as we approach next attempt.
+        // For cooldown we know the total; for slow_start we use min_interval;
+        // for tick state we use coordinator_tick_s. Visual feedback only.
+        let total;
+        if (t.state === "cooldown")        total = (t.cooldown || {}).total_s || 60;
+        else if (t.state === "slow_start") total = (t.slow_start || {}).min_interval_s || 60;
+        else                               total = t.coordinator_tick_s || 20;
+        const pct = Math.min(100, Math.max(0, ((total - remaining) / total) * 100));
+        bar.style.width = pct.toFixed(1) + "%";
+    }
+
     async function refreshSummary() {
         try {
             const data = await (await fetch("/api/dashboard/summary")).json();
@@ -58,6 +147,14 @@
             pill.dataset.state = data.alive ? "alive" : "dead";
             pill.querySelector(".status-text").textContent =
                 data.alive ? "scheduler · live" : "scheduler · offline";
+
+            // Poll timer — capture data + resync timestamp; renderPollTimer
+            // pulls from these locals + decays remaining via wall-clock.
+            if (data.poll_timer) {
+                pollTimerData = data.poll_timer;
+                pollTimerLastSync = Date.now();
+                renderPollTimer();
+            }
 
             const r = data.rates || {};
             document.getElementById("stat-watches").textContent =
@@ -438,6 +535,9 @@
         refreshPerWatch();
         refreshHistogram();
 
+        // Re-render the poll timer 1x/sec so the countdown ticks down
+        // visibly between server resyncs.
+        setInterval(renderPollTimer,   1000);
         setInterval(refreshSummary,   5000);
         setInterval(() => {
             if (activeTailSource === "events") refreshEvents();

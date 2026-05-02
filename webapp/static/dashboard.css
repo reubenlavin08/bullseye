@@ -37,6 +37,110 @@
     font-family: var(--font-mono);
 }
 
+/* ---------- 0. Poll timer ----------- */
+
+.poll-timer-block {
+    padding: 18px 22px 14px;
+}
+
+.poll-timer {
+    display: flex;
+    align-items: stretch;
+    gap: 18px;
+    justify-content: space-between;
+}
+
+.poll-timer-left {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+.poll-timer-state-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.poll-timer-icon {
+    font-size: 24px;
+    line-height: 1;
+    color: var(--fg-muted);
+}
+.poll-timer-state {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    color: var(--fg);
+}
+.poll-timer-detail {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.poll-timer-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 2px;
+    min-width: 130px;
+}
+.poll-timer-countdown {
+    font-family: var(--font-slab);
+    font-size: 38px;
+    line-height: 1;
+    color: var(--fg);
+}
+.poll-timer-countdown-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+}
+
+.poll-timer-bar-wrap {
+    margin-top: 14px;
+    height: 5px;
+    background: rgba(63, 23, 24, 0.08);
+    border-radius: 999px;
+    overflow: hidden;
+}
+.poll-timer-bar {
+    height: 100%;
+    width: 0;
+    background: var(--fg-muted);
+    transition: width 800ms var(--ease);
+}
+
+/* State-specific colors */
+.poll-timer[data-state="cooldown"]    .poll-timer-icon { color: var(--bad); }
+.poll-timer[data-state="cooldown"]    .poll-timer-state { color: var(--bad); }
+.poll-timer[data-state="cooldown"]    .poll-timer-countdown { color: var(--bad); }
+.poll-timer[data-state="cooldown"]    ~ .poll-timer-bar-wrap .poll-timer-bar,
+.poll-timer-block:has(.poll-timer[data-state="cooldown"]) .poll-timer-bar { background: var(--bad); }
+
+.poll-timer[data-state="slow_start"]  .poll-timer-icon { color: var(--warn); }
+.poll-timer[data-state="slow_start"]  .poll-timer-state { color: var(--warn); }
+.poll-timer[data-state="slow_start"]  .poll-timer-countdown { color: var(--warn); }
+.poll-timer-block:has(.poll-timer[data-state="slow_start"]) .poll-timer-bar { background: var(--warn); }
+
+.poll-timer[data-state="tick"]        .poll-timer-icon { color: var(--good); }
+.poll-timer[data-state="tick"]        .poll-timer-state { color: var(--good); }
+.poll-timer[data-state="tick"]        .poll-timer-countdown { color: var(--good); }
+.poll-timer-block:has(.poll-timer[data-state="tick"]) .poll-timer-bar { background: var(--good); }
+
+@media (max-width: 540px) {
+    .poll-timer { flex-direction: column; align-items: flex-start; gap: 12px; }
+    .poll-timer-right { align-items: flex-start; }
+}
+
 /* ---------- 1. Status strip ----------- */
 
 .status-strip {

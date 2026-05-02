@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 
@@ -310,6 +311,135 @@ def dashboard_page():
     return render_template("dashboard.html")
 
 
+def _compute_poll_timer() -> dict:
+    """Compute the user-visible 'when does the next FB poll happen?' state.
+
+    Mirrors the runtime logic in scheduler/jobs.py:
+      - Cooldown: exponential by #rate-limit events in last 30 min,
+        starting at 60s, capped at 600s, anchored to most recent
+        rate-limit. While cooldown > 0, we skip ticks.
+      - Slow-start: if SLOW_START_MODE is on, we also enforce a min
+        interval between attempts that decays toward COORDINATOR_TICK_S
+        as we go without rate-limits. Tracked in scheduler memory but
+        we approximate from the most recent slow_start_ramp event.
+      - Coordinator tick: fires every COORDINATOR_TICK_S regardless,
+        so the ABSOLUTE upper bound on next-attempt is one tick.
+
+    Returns a dict the dashboard renders:
+      state: 'cooldown' | 'slow_start' | 'tick' | 'idle'
+      next_attempt_in_s: seconds until next attempt (best estimate)
+      last_attempt_iso: ISO timestamp of the most recent poll/blocked attempt
+      cooldown:
+        active: bool
+        remaining_s: int
+        total_s: int  (the full cooldown duration we're inside of)
+        rate_limits_in_window: int (count over 30 min that drove the cooldown)
+      slow_start:
+        active: bool   (any slow_start_ramp event seen → assume on)
+        min_interval_s: int  (current effective interval)
+        elapsed_since_last_attempt_s: int
+      coordinator_tick_s: int  (the floor — what cadence ticks fire at)
+    """
+    BASE = 60
+    MAX = 600
+    WINDOW = 1800
+    DEFAULT_TICK = 20
+    DEFAULT_INITIAL = 60
+    DEFAULT_FLOOR = 20
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Most recent rate-limit and how many in the last WINDOW seconds.
+            cur.execute(
+                f"""SELECT
+                       COUNT(*),
+                       MAX(created_at)
+                   FROM scheduler_events
+                   WHERE event_type = 'fb_rate_limit'
+                     AND created_at >= NOW() - INTERVAL '{WINDOW} seconds'""",
+            )
+            rl_n, rl_last = cur.fetchone()
+
+            # Most recent attempt of any kind (poll OR rate-limit hit).
+            cur.execute(
+                """SELECT MAX(created_at) FROM scheduler_events
+                   WHERE event_type IN ('poll','fb_rate_limit')""",
+            )
+            last_attempt = cur.fetchone()[0]
+
+            # Most recent slow_start_ramp event tells us the current
+            # effective slow-start min interval. Empty → use default.
+            cur.execute(
+                """SELECT detail->>'to_s', detail->>'direction'
+                   FROM scheduler_events
+                   WHERE event_type = 'slow_start_ramp'
+                   ORDER BY created_at DESC
+                   LIMIT 1""",
+            )
+            ss_row = cur.fetchone()
+
+    now = datetime.now(timezone.utc)
+
+    # --- Cooldown ---
+    cooldown_remaining = 0
+    cooldown_total = 0
+    if rl_n and rl_last:
+        cooldown_total = min(BASE * (2 ** min(int(rl_n) - 1, 4)), MAX)
+        elapsed = (now - rl_last).total_seconds()
+        cooldown_remaining = max(0, int(cooldown_total - elapsed))
+
+    # --- Slow-start ---
+    slow_start_active = ss_row is not None
+    if ss_row and ss_row[0] is not None:
+        try:
+            slow_start_min = int(ss_row[0])
+        except (TypeError, ValueError):
+            slow_start_min = DEFAULT_INITIAL
+    else:
+        slow_start_min = DEFAULT_INITIAL
+
+    seconds_since_last_attempt = (
+        int((now - last_attempt).total_seconds()) if last_attempt else 999_999
+    )
+
+    # --- Resolve to a single state + next-attempt countdown ---
+    if cooldown_remaining > 0:
+        state = "cooldown"
+        next_in = cooldown_remaining
+    elif slow_start_active and seconds_since_last_attempt < slow_start_min:
+        state = "slow_start"
+        next_in = max(0, slow_start_min - seconds_since_last_attempt)
+    else:
+        # Bound by coordinator tick — at most 1 tick away.
+        state = "tick"
+        # Without an in-process hook to APScheduler, the worst case is
+        # tick_s seconds from now. The actual fire could be sooner but
+        # we don't have the next_run_time across processes.
+        next_in = DEFAULT_TICK
+
+    return {
+        "state": state,
+        "next_attempt_in_s": int(next_in),
+        "last_attempt_iso": last_attempt.isoformat() if last_attempt else None,
+        "cooldown": {
+            "active": cooldown_remaining > 0,
+            "remaining_s": int(cooldown_remaining),
+            "total_s": int(cooldown_total),
+            "rate_limits_in_window": int(rl_n or 0),
+            "window_minutes": WINDOW // 60,
+        },
+        "slow_start": {
+            "active": slow_start_active,
+            "min_interval_s": int(slow_start_min),
+            "elapsed_since_last_attempt_s": int(seconds_since_last_attempt)
+                if last_attempt else None,
+            "floor_s": DEFAULT_FLOOR,
+            "initial_s": DEFAULT_INITIAL,
+        },
+        "coordinator_tick_s": DEFAULT_TICK,
+    }
+
+
 @app.route("/api/dashboard/summary")
 def api_dashboard_summary():
     """Status strip + pipeline funnel + alive check.
@@ -394,7 +524,8 @@ def api_dashboard_summary():
             )
             active_w, total_w = cur.fetchone()
 
-    now = datetime.now(timezone.utc) if False else None  # noqa
+    poll_timer = _compute_poll_timer()
+
     return jsonify({
         "alive": _is_alive(last_event),
         "last_event_iso": last_event.isoformat() if last_event else None,
@@ -413,6 +544,7 @@ def api_dashboard_summary():
             "pipeline_errors_24h": errors_24h,
         },
         "scheduler_booted_at": last_boot.isoformat() if last_boot else None,
+        "poll_timer": poll_timer,
         "funnel_today": {
             "scraped": scraped,
             "rejected": rej,

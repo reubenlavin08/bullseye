@@ -62,32 +62,59 @@ COORDINATOR_TICK_S = int(os.environ.get("COORDINATOR_TICK_S", "20"))
 WARMUP_LLM_ON_BOOT = os.environ.get("WARMUP_LLM_ON_BOOT", "1") not in ("0", "")
 
 
+# Module-level cache so we only emit a 'reload' event when the
+# active-watch count actually CHANGES. Otherwise a 20s reload tick was
+# spamming an event every interval forever, drowning the dashboard's
+# event tail in noise. The function still RUNS every tick (it's cheap)
+# to detect changes; we just don't record an event unless the count
+# moved.
+_last_reported_active_count: int | None = None
+
+
 def reload_searches(scheduler: BlockingScheduler) -> None:
-    """Recompute the active-watch count + log it.
+    """Detect changes to the active-watch count and emit a 'reload'
+    event only when something actually changed.
 
     Under the coordinator pattern there's no per-watch APScheduler job
     to add/remove — the coordinator picks watches dynamically each
-    tick. This function still runs periodically to:
-      - report the current active-watch count via a 'reload' event
-        (used by the dashboard)
-      - log the effective per-watch poll interval given current N
+    tick. This function exists purely as a heartbeat that watches
+    for new/removed watches so the dashboard's 'reload' event tail
+    reflects real changes, not spam.
     """
+    global _last_reported_active_count
     active = list_active_search_ids()
     n = len(active)
     eff_per_watch_s = COORDINATOR_TICK_S * max(n, 1)
-    logger.info(
-        "reload: %d active watch(es); coordinator tick %ds; "
-        "effective per-watch poll cadence ~%d sec (~%.1f min)",
-        n, COORDINATOR_TICK_S, eff_per_watch_s, eff_per_watch_s / 60,
-    )
+
+    if _last_reported_active_count == n:
+        return  # no change — silent
+
+    if _last_reported_active_count is None:
+        # First call after boot — log full state once for the record.
+        logger.info(
+            "reload: %d active watch(es); coordinator tick %ds; "
+            "effective per-watch poll cadence ~%d sec (~%.1f min)",
+            n, COORDINATOR_TICK_S, eff_per_watch_s, eff_per_watch_s / 60,
+        )
+        delta_msg = "boot"
+    else:
+        delta = n - _last_reported_active_count
+        sign = "+" if delta > 0 else ""
+        delta_msg = f"{sign}{delta}"
+        logger.info(
+            "reload: active watch count %d -> %d (%s)",
+            _last_reported_active_count, n, delta_msg,
+        )
+
     record_event(
         "reload",
-        added=[],
-        removed=[],
         total_active=n,
+        previous_active=_last_reported_active_count,
+        delta=delta_msg,
         coordinator_tick_s=COORDINATOR_TICK_S,
         effective_per_watch_s=eff_per_watch_s,
     )
+    _last_reported_active_count = n
 
 
 def _reload_tick(scheduler: BlockingScheduler) -> None:

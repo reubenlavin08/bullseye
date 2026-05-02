@@ -34,6 +34,26 @@
             scored, what's been emailed. Polls every 5 seconds; live event tail every 2 seconds.
         </p>
 
+        <!-- 0. Poll timer — what's blocking the next FB poll? -->
+        <section class="dash-block poll-timer-block" id="poll-timer-block">
+            <div class="poll-timer" data-state="loading">
+                <div class="poll-timer-left">
+                    <div class="poll-timer-state-row">
+                        <span class="poll-timer-icon" id="poll-timer-icon">·</span>
+                        <span class="poll-timer-state" id="poll-timer-state">checking…</span>
+                    </div>
+                    <div class="poll-timer-detail muted" id="poll-timer-detail">—</div>
+                </div>
+                <div class="poll-timer-right">
+                    <div class="poll-timer-countdown" id="poll-timer-countdown">—</div>
+                    <div class="poll-timer-countdown-label">until next attempt</div>
+                </div>
+            </div>
+            <div class="poll-timer-bar-wrap">
+                <div class="poll-timer-bar" id="poll-timer-bar"></div>
+            </div>
+        </section>
+
         <!-- 1. Status strip -->
         <section class="dash-block status-strip" id="status-strip">
             <div class="status-pill" id="alive-pill" data-state="loading">
