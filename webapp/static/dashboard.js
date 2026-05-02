@@ -186,9 +186,13 @@
             const feed = document.getElementById("event-feed");
             // First load: replace contents.
             if (lastEventId === 0) feed.innerHTML = "";
-            // The API returns newest-first; we render newest-first too.
-            // For incremental, prepend the new ones.
-            events.forEach((e) => {
+            // The API returns newest-first ([N, N-1, ..., N-k]). Each
+            // insertBefore prepends, which inverts iteration order — so we
+            // must iterate OLDEST-FIRST for the final order to be
+            // newest-at-top. The previous bug was a straight forEach which
+            // produced reverse-chronological with the OLDEST event ending
+            // up at the top of the feed.
+            events.slice().reverse().forEach((e) => {
                 feed.insertBefore(eventLine(e), feed.firstChild);
                 if (e.id > lastEventId) lastEventId = e.id;
             });
