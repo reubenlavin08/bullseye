@@ -262,6 +262,92 @@
         });
     }
 
+    // --- 4b: appraisal feed -------------------------------------------
+
+    let appraisalFilter = "all";
+
+    function setupAppraisalFilters() {
+        const wrap = document.getElementById("appraisal-filters");
+        if (!wrap) return;
+        wrap.querySelectorAll(".dash-tab").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                wrap.querySelectorAll(".dash-tab").forEach((b) =>
+                    b.classList.remove("is-active"));
+                btn.classList.add("is-active");
+                appraisalFilter = btn.dataset.filter || "all";
+                refreshAppraisalFeed();
+            });
+        });
+    }
+
+    function statusBadge(status) {
+        const labels = {
+            emailed: "EMAILED",
+            passed:  "≥ THRESH",
+            scored:  "SCORED",
+            unscoreable: "NO SCORE",
+            rejected: "REJECTED",
+            pending:  "PENDING",
+        };
+        return `<span class="apr-status apr-status-${status}">${labels[status] || status}</span>`;
+    }
+
+    function scoreBadge(score, status) {
+        if (score == null) return `<span class="apr-score apr-score-none">—</span>`;
+        let cls = "apr-score-low";
+        if (score >= 70) cls = "apr-score-high";
+        else if (score >= 50) cls = "apr-score-mid";
+        return `<span class="apr-score ${cls}">${score}</span>`;
+    }
+
+    function fmtPrice(p) {
+        if (p == null) return "—";
+        return "$" + Math.round(p).toLocaleString();
+    }
+
+    async function refreshAppraisalFeed() {
+        try {
+            const url = `/api/dashboard/appraisal-feed?filter=${appraisalFilter}&limit=60`;
+            const data = await (await fetch(url)).json();
+            const wrap = document.getElementById("appraisal-feed");
+            const listings = data.listings || [];
+            if (!listings.length) {
+                wrap.innerHTML = `<div class="muted">no listings yet for filter '${appraisalFilter}'</div>`;
+                return;
+            }
+            const threshold = data.threshold || 70;
+            wrap.innerHTML = listings.map((l) => {
+                const ts = l.appraised_at || l.scraped_at;
+                const ago = timeAgo(ts);
+                const tail = l.rejected
+                    ? `<span class="apr-tail bad">rejected: ${escapeHtml(l.rejection_reason || "n/a")}</span>`
+                    : (l.deal_score != null
+                        ? `<span class="apr-tail">${escapeHtml(l.appraisal_note || "")} · n=${l.comp_sample_size ?? "?"} · fair $${l.fair_value != null ? Math.round(l.fair_value) : "?"}</span>`
+                        : `<span class="apr-tail muted">${escapeHtml(l.appraisal_note || "no score")}</span>`);
+                const href = l.listing_url || "#";
+                return `
+                    <a class="apr-row apr-row-${l.status}" href="${href}" target="_blank" rel="noopener">
+                        ${scoreBadge(l.deal_score, l.status)}
+                        <div class="apr-main">
+                            <div class="apr-title-row">
+                                <span class="apr-title">${escapeHtml(l.title || "")}</span>
+                                ${statusBadge(l.status)}
+                            </div>
+                            <div class="apr-meta">
+                                <span class="apr-kw">${escapeHtml(l.keyword || "—")}</span>
+                                <span class="apr-price">${fmtPrice(l.price)}</span>
+                                <span class="apr-ago">${ago}</span>
+                                ${tail}
+                            </div>
+                        </div>
+                    </a>
+                `;
+            }).join("");
+        } catch (err) {
+            console.warn("appraisal feed refresh failed:", err);
+        }
+    }
+
     // --- 5: histogram --------------------------------------------------
 
     async function refreshHistogram() {
@@ -296,9 +382,11 @@
     function start() {
         setupTailTabs();
         setupPerWatchSort();
+        setupAppraisalFilters();
 
         refreshSummary();
         refreshEvents();
+        refreshAppraisalFeed();
         refreshPerWatch();
         refreshHistogram();
 
@@ -307,6 +395,7 @@
             if (activeTailSource === "events") refreshEvents();
             else refreshRawLog();
         }, 2000);
+        setInterval(refreshAppraisalFeed, 4000);
         setInterval(refreshPerWatch,  30000);
         setInterval(refreshHistogram, 30000);
     }

@@ -92,7 +92,27 @@
             </div>
         </section>
 
-        <!-- 4. Per-watch performance -->
+        <!-- 4. Appraisal feed — live per-listing -->
+        <section class="dash-block">
+            <div class="dash-block-head">
+                <span class="receipt-stamp">appraisal feed · 4s refresh</span>
+                <div class="dash-tabs" id="appraisal-filters">
+                    <button class="dash-tab is-active" data-filter="all">All</button>
+                    <button class="dash-tab" data-filter="passed">≥ Threshold</button>
+                    <button class="dash-tab" data-filter="scored">Scored</button>
+                    <button class="dash-tab" data-filter="unscoreable">Unscoreable</button>
+                    <button class="dash-tab" data-filter="rejected">Rejected</button>
+                </div>
+            </div>
+            <div class="muted dash-block-sub" style="margin-bottom:10px;">
+                Newest first. Color-coded by pipeline outcome. Click a row to open the FB listing.
+            </div>
+            <div class="appraisal-feed" id="appraisal-feed">
+                <div class="muted">connecting…</div>
+            </div>
+        </section>
+
+        <!-- 5. Per-watch performance -->
         <section class="dash-block">
             <div class="dash-block-head">
                 <span class="receipt-stamp">per-watch performance · 24h</span>
@@ -117,7 +137,7 @@
             </div>
         </section>
 
-        <!-- 5. Score histogram -->
+        <!-- 6. Score histogram -->
         <section class="dash-block">
             <div class="dash-block-head">
                 <span class="receipt-stamp">score distribution · 24h</span>

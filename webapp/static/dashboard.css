@@ -256,7 +256,132 @@
 .log-line.log-warn  { color: var(--warn); }
 .log-line.log-error { color: var(--bad); }
 
-/* ---------- 4. Per-watch table ---------- */
+/* ---------- 4b. Appraisal feed ---------- */
+
+.appraisal-feed {
+    max-height: 600px;
+    overflow-y: auto;
+    background: rgba(63, 23, 24, 0.04);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.apr-row {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 14px;
+    padding: 10px 12px;
+    border: 1px dashed rgba(63, 23, 24, 0.10);
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    color: var(--fg);
+    background: rgba(255, 252, 244, 0.55);
+    transition: transform 80ms var(--ease), border-color 120ms var(--ease);
+    align-items: center;
+}
+.apr-row:hover {
+    border-color: var(--border-strong);
+    transform: translateX(2px);
+}
+
+/* Score-tinted left edge per status */
+.apr-row-emailed     { border-left: 4px solid var(--good); }
+.apr-row-passed      { border-left: 4px solid var(--good); }
+.apr-row-scored      { border-left: 4px solid var(--warn); }
+.apr-row-unscoreable { border-left: 4px solid var(--fg-dim); }
+.apr-row-rejected    { border-left: 4px solid var(--bad); opacity: 0.72; }
+.apr-row-pending     { border-left: 4px solid var(--fg-dim); }
+
+.apr-score {
+    font-family: var(--font-slab);
+    font-size: 26px;
+    line-height: 1;
+    font-weight: 400;
+    text-align: center;
+    padding: 4px 0;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 252, 244, 0.7);
+}
+.apr-score-high { color: var(--good); border-color: rgba(93, 107, 58, 0.5); }
+.apr-score-mid  { color: var(--warn); border-color: rgba(184,121,31,0.45); }
+.apr-score-low  { color: var(--fg-dim); }
+.apr-score-none { color: var(--fg-dim); font-size: 18px; padding: 8px 0; }
+
+.apr-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.apr-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: space-between;
+}
+.apr-title {
+    font-family: var(--font-slab);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+.apr-status {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.apr-status-emailed     { background: rgba(93, 107, 58, 0.18); color: var(--good); }
+.apr-status-passed      { background: rgba(93, 107, 58, 0.12); color: var(--good); }
+.apr-status-scored      { background: rgba(184,121,31,0.16); color: var(--warn); }
+.apr-status-unscoreable { background: var(--bg-elev); color: var(--fg-muted); }
+.apr-status-rejected    { background: rgba(154, 42, 42, 0.14); color: var(--bad); }
+.apr-status-pending     { background: var(--bg-elev); color: var(--fg-muted); }
+
+.apr-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--fg-muted);
+    line-height: 1.4;
+}
+.apr-kw {
+    color: var(--accent);
+    font-weight: 600;
+}
+.apr-price {
+    color: var(--fg);
+    font-weight: 600;
+}
+.apr-ago {
+    color: var(--fg-dim);
+}
+.apr-tail {
+    color: var(--fg-muted);
+    font-size: 9px;
+    letter-spacing: 0.04em;
+}
+.apr-tail.bad { color: var(--bad); }
+.apr-tail.muted { opacity: 0.7; }
+
+/* ---------- 5. Per-watch table ---------- */
 
 .per-watch-table-wrap {
     overflow-x: auto;

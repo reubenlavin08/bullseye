@@ -20,6 +20,7 @@ scraper's own throttle. Don't expose to the internet.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from dataclasses import asdict
@@ -509,6 +510,146 @@ def api_dashboard_histogram():
     return jsonify({
         "buckets": [{"label": l, "count": c} for l, c in zip(labels, buckets)],
     })
+
+
+@app.route("/api/dashboard/appraisal-feed")
+def api_dashboard_appraisal_feed():
+    """Per-listing live feed of everything flowing through the pipeline.
+
+    Returns the most-recently-touched listings (newest first) with full
+    pipeline status: rejected? scored? above-threshold? emailed?
+
+    Query params:
+      since_id  — return only listings with internal cursor > this value
+                  (uses scraped_at + id for stable ordering across ticks)
+      limit     — page size (default 60, max 200)
+      filter    — one of: all (default), passed, scored, rejected, unscoreable
+
+    Rows include:
+      id, title, price, deal_score, fair_value, watch_keyword,
+      rejected, rejection_reason, appraisal_note, listing_url, photo_url,
+      scraped_at, appraised_at, notified, status
+        ("emailed" | "passed" | "scored" | "unscoreable" | "rejected" | "pending")
+
+    `status` is what the UI uses to color-code each row.
+    """
+    try:
+        limit = int(request.args.get("limit", 60))
+    except (TypeError, ValueError):
+        limit = 60
+    limit = max(1, min(limit, 200))
+    filt = (request.args.get("filter") or "all").lower()
+    since_id = request.args.get("since_id") or None
+
+    where_clauses = []
+    params: list = []
+
+    if filt == "passed":
+        where_clauses.append(
+            "l.appraised = TRUE AND l.rejected = FALSE "
+            "AND l.deal_score >= %s"
+        )
+        params.append(_default_threshold())
+    elif filt == "scored":
+        where_clauses.append("l.appraised = TRUE AND l.rejected = FALSE "
+                             "AND l.deal_score IS NOT NULL")
+    elif filt == "rejected":
+        where_clauses.append("l.rejected = TRUE")
+    elif filt == "unscoreable":
+        where_clauses.append("l.appraised = TRUE AND l.deal_score IS NULL "
+                             "AND l.rejected = FALSE")
+    # 'all' adds no filter
+
+    if since_id:
+        # since_id is the listing's PK (TEXT). For pagination of "newer than"
+        # we use the scraped_at + id tuple. Simplest: filter by id != since_id
+        # and rely on ordering. Since id is text, the cleanest "newer" is
+        # by scraped_at - we'll just request all rows scraped after the given
+        # id's scraped_at.
+        where_clauses.append(
+            "(l.scraped_at, l.id) > "
+            "(SELECT scraped_at, id FROM listings WHERE id = %s)"
+        )
+        params.append(since_id)
+
+    where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+    threshold = _default_threshold()
+
+    rows: list[dict] = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""SELECT l.id, l.title, l.price, l.deal_score, l.fair_value,
+                          l.rejected, l.rejection_reason, l.appraisal_note,
+                          l.listing_url, l.photo_url,
+                          l.scraped_at, l.appraised_at,
+                          l.notified, l.appraised,
+                          l.comp_sample_size, l.comp_median,
+                          us.keyword
+                   FROM listings l
+                   LEFT JOIN user_searches us ON us.id = l.search_id
+                   WHERE {where_sql}
+                   ORDER BY GREATEST(
+                       l.scraped_at,
+                       COALESCE(l.appraised_at, l.scraped_at)
+                   ) DESC, l.id DESC
+                   LIMIT %s""",
+                (*params, limit),
+            )
+            for r in cur.fetchall():
+                (lid, title, price, score, fair, rejected, rej_reason,
+                 appraisal_note, listing_url, photo_url,
+                 scraped_at, appraised_at, notified, appraised,
+                 comp_n, comp_median, keyword) = r
+
+                # Status classification — the row's color tag in the UI.
+                if rejected:
+                    status = "rejected"
+                elif notified:
+                    status = "emailed"
+                elif appraised and score is not None and score >= threshold:
+                    status = "passed"
+                elif appraised and score is not None:
+                    status = "scored"
+                elif appraised and score is None:
+                    status = "unscoreable"
+                else:
+                    status = "pending"
+
+                rows.append({
+                    "id": lid,
+                    "title": title,
+                    "price": float(price) if price is not None else None,
+                    "deal_score": int(score) if score is not None else None,
+                    "fair_value": float(fair) if fair is not None else None,
+                    "rejected": bool(rejected),
+                    "rejection_reason": rej_reason,
+                    "appraisal_note": appraisal_note,
+                    "listing_url": listing_url,
+                    "photo_url": photo_url,
+                    "scraped_at": scraped_at.isoformat() if scraped_at else None,
+                    "appraised_at": appraised_at.isoformat() if appraised_at else None,
+                    "notified": bool(notified),
+                    "appraised": bool(appraised),
+                    "comp_sample_size": int(comp_n) if comp_n is not None else None,
+                    "comp_median": float(comp_median) if comp_median is not None else None,
+                    "keyword": keyword,
+                    "status": status,
+                })
+
+    return jsonify({"listings": rows, "threshold": threshold, "filter": filt})
+
+
+def _default_threshold() -> int:
+    """Threshold used to color-code 'passed' rows on the appraisal feed.
+    Pulls from env (ALERT_SCORE_THRESHOLD) — the same default that
+    governs new subscribers. Per-subscriber thresholds still apply for
+    actual email sending; this is just for visual consistency on the
+    dashboard."""
+    try:
+        return int(os.environ.get("ALERT_SCORE_THRESHOLD", "70"))
+    except (TypeError, ValueError):
+        return 70
 
 
 @app.route("/api/dashboard/log/tail")
