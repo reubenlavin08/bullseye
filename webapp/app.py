@@ -84,12 +84,15 @@ def _enrich_listing(sl) -> dict:
     base["appraisal_note"] = None
     base["comp_median"] = None
     base["comp_sample_size"] = None
+    base["comp_search_term"] = None
+    base["comp_source"] = None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT deal_score, fair_value, appraisal_note,
-                              comp_median, comp_sample_size
+                              comp_median, comp_sample_size,
+                              comp_search_term, comp_source
                        FROM listings WHERE id = %s AND appraised = TRUE""",
                     (sl.id,),
                 )
@@ -100,6 +103,8 @@ def _enrich_listing(sl) -> dict:
                     base["appraisal_note"] = row[2]
                     base["comp_median"] = float(row[3]) if row[3] is not None else None
                     base["comp_sample_size"] = row[4]
+                    base["comp_search_term"] = row[5]
+                    base["comp_source"] = row[6]
     except Exception:  # noqa: BLE001
         # DB might be down; the rest of the UI should still render.
         pass
@@ -223,6 +228,60 @@ def detail(listing_id: str):
         "source": detail_obj.source,
         "error": error,
         "pipeline": pipeline,
+    })
+
+
+@app.route("/api/comps")
+def api_comps():
+    """Return the recent comp rows that built a given median.
+
+    Query params:
+      term   -- the comp_search_term (URL-encoded)
+      source -- 'marketplace' (default) or 'ebay' (later)
+
+    Used by the trust UI: user clicks the median number on a card and
+    sees exactly which listings the LLM was anchored on.
+    """
+    term = (request.args.get("term") or "").strip()
+    source = (request.args.get("source") or "marketplace").strip()
+    ttl_seconds = int(request.args.get("ttl") or 12 * 3600)
+    if not term:
+        return jsonify({"error": "missing 'term'"}), 400
+
+    rows = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT price, title, listing_url, location, fetched_at
+                   FROM comps
+                   WHERE search_term = %s AND source = %s
+                     AND fetched_at >= NOW() - INTERVAL '%s seconds'
+                   ORDER BY price ASC""",
+                (term, source, ttl_seconds),
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "price": float(r[0]),
+                    "title": r[1],
+                    "listing_url": r[2],
+                    "location": r[3],
+                    "fetched_at": r[4].isoformat() if r[4] else None,
+                })
+
+    if not rows:
+        return jsonify({"term": term, "source": source, "rows": []})
+
+    prices = [r["price"] for r in rows]
+    import statistics
+    return jsonify({
+        "term": term,
+        "source": source,
+        "sample_size": len(rows),
+        "median": statistics.median(prices),
+        "mean": statistics.fmean(prices),
+        "min": min(prices),
+        "max": max(prices),
+        "rows": rows,
     })
 
 

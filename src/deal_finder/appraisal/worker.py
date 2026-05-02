@@ -27,11 +27,14 @@ from ..db.listings import update_appraisal, update_comps_resolution
 from ..db.comps import CompStats
 from ..scraper.facebook_detail import get_default_client as get_detail_client
 from ..scraper.price_extraction import resolve_price
-from .normalizer import normalize_title
+from .normalizer import (
+    DEFAULT_MODEL as NORMALIZER_MODEL,
+    extract_price_llm,
+    normalize_title,
+)
 from .ollama_client import get_default_client
 from .scorer import DEFAULT_MODEL as SCORER_MODEL
 from .scorer import score_listing
-from .normalizer import DEFAULT_MODEL as NORMALIZER_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +115,34 @@ def drain_queue(
     return stats
 
 
+def _recover_price(
+    raw_price: float, description: str,
+) -> tuple[float, bool]:
+    """Recover a real asking price from a placeholder + description.
+
+    Tries regex first (fast, free). If regex doesn't find a price AND the
+    raw value is still <= $1, falls back to the small LLM (slower, more
+    robust to weird formats: 'two hundred', '$2k', 'asking 1.5K').
+
+    Returns (resolved_price, extracted_flag). On total failure, returns
+    (raw_price, False).
+    """
+    pr = resolve_price(raw_price, description)
+    if pr.extracted:
+        return pr.price, True
+
+    # Regex missed and asking is still placeholder-low — try the LLM.
+    if raw_price <= 1.0 and description:
+        llm_price = extract_price_llm(description)
+        if llm_price is not None:
+            logger.debug(
+                "LLM rescued price from description: $%.2f", llm_price,
+            )
+            return llm_price, True
+
+    return pr.price, False
+
+
 def _fetch_queue(limit: int) -> list[dict]:
     """Pull the next batch of unappraised, non-rejected listings."""
     with get_conn() as conn:
@@ -162,9 +193,7 @@ def _process_one(
         detail = get_detail_client().fetch(listing_id)
         if detail.description:
             description = detail.description
-            pr = resolve_price(raw_price, description)
-            asking = pr.price
-            price_extracted = pr.extracted
+            asking, price_extracted = _recover_price(raw_price, description)
             # Persist the rescued data so we don't refetch next cycle.
             with get_conn() as conn:
                 with conn:

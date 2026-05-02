@@ -147,11 +147,16 @@
                                             <div class="score-note">{{ r.appraisal_note }}</div>
                                         {% endif %}
                                         {% if r.comp_sample_size is not none %}
-                                            <div class="score-comps muted">
-                                                {{ r.comp_sample_size }} comp(s)
-                                                {% if r.comp_median %}
-                                                    · median ${{ '%.0f'|format(r.comp_median) }}
-                                                {% endif %}
+                                            <button class="comps-toggle muted"
+                                                    type="button"
+                                                    data-comp-term="{{ r.comp_search_term or '' }}"
+                                                    data-comp-source="{{ r.comp_source or 'marketplace' }}"
+                                                    title="See the listings this median is based on">
+                                                {{ r.comp_sample_size }} comp(s){% if r.comp_median %} · median ${{ '%.0f'|format(r.comp_median) }}{% endif %} ▾
+                                            </button>
+                                            <div class="comps-pane" hidden>
+                                                <div class="comps-spinner" hidden>loading…</div>
+                                                <div class="comps-content"></div>
                                             </div>
                                         {% endif %}
                                     </div>
