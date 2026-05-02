@@ -134,7 +134,8 @@
                                 {% if r.deal_score is not none %}
                                     {% set bd = r.appraisal_breakdown %}
                                     <div class="appraisal-display
-                                                {% if r.deal_score >= 70 %}score-high
+                                                {% if bd and bd.data_quality_poor %}score-low
+                                                {% elif r.deal_score >= 70 %}score-high
                                                 {% elif r.deal_score >= 50 %}score-mid
                                                 {% else %}score-low{% endif %}">
                                         <div class="score-row">
@@ -147,6 +148,22 @@
                                                 <span class="score-fair">fair: ${{ '%.0f'|format(r.fair_value) }}</span>
                                             {% endif %}
                                         </div>
+                                        {% if bd and bd.data_quality_poor %}
+                                            <div class="data-warning"
+                                                 title="IQR ${{ '%.0f'|format(bd.iqr or 0) }} exceeds trimmed median ${{ '%.0f'|format(bd.trimmed_median or 0) }}; comp distribution is too dispersed for a single number to be reliable. Consider the percentile rank instead.">
+                                                ⚠ comps too varied — score unreliable
+                                            </div>
+                                        {% endif %}
+                                        {% if bd and bd.percentile_rank is not none %}
+                                            <div class="pct-rank">
+                                                Asking sits at the
+                                                <strong>{{ '%.0f'|format(bd.percentile_rank * 100) }}<sup>th</sup></strong>
+                                                percentile of comps
+                                                <span class="pct-detail muted">
+                                                    (cheaper than {{ '%.0f'|format((1 - bd.percentile_rank) * 100) }}% of similar listings)
+                                                </span>
+                                            </div>
+                                        {% endif %}
                                         {% if bd and bd.confidence_label %}
                                             <div class="confidence-bar conf-{{ bd.confidence_label }}"
                                                  title="confidence interval is ±{{ bd.confidence_pm }} on the score; based on sample size of {{ bd.sample_size }} comp(s)">

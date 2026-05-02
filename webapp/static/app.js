@@ -146,34 +146,12 @@
             const data = await res.json();
 
             if (data.ok) {
-                const score = data.deal_score;
-                const klass = score >= 70 ? "score-high"
-                            : score >= 50 ? "score-mid" : "score-low";
-                const ratio = data.ratio || 0;
-                const asking = data.breakdown && data.breakdown.asking_price;
-                const fair = data.fair_value;
-                result.innerHTML =
-                    '<div class="appraisal-display ' + klass + '">' +
-                    '<div class="score-row">' +
-                        '<span class="score-num">' + score + '</span>' +
-                        (data.confidence_pm ? '<span class="score-pm">±' + data.confidence_pm + '</span>' : '') +
-                        '<span class="score-label">deal score</span>' +
-                        (fair ? '<span class="score-fair">fair: $' + Math.round(fair) + '</span>' : '') +
-                    '</div>' +
-                    (asking && fair ?
-                        '<div class="score-math">' +
-                            '<span class="math-eq">$' + Math.round(asking) + ' ÷ $' + Math.round(fair) + ' = ratio <strong>' + ratio.toFixed(2) + '</strong></span>' +
-                            '<span class="math-source muted">' + escapeHtml(data.fair_value_source || "") + '</span>' +
-                        '</div>'
-                    : '') +
-                    (data.note ? '<div class="score-note">' + escapeHtml(data.note) + '</div>' : '') +
-                    '<div class="score-comps muted">' +
-                        (data.comp_sample_size || 0) + ' comp(s) for "' +
-                        escapeHtml(data.search_term || "") + '"' +
-                        (data.outliers_dropped ? ", " + data.outliers_dropped + " outlier(s) dropped" : "") +
-                        (data.comp_median ? ' · raw median $' + Math.round(data.comp_median) : '') +
-                        (data.elapsed_s ? ' · LLM ' + data.elapsed_s.toFixed(1) + 's' : ' · formula-only') +
-                    '</div></div>';
+                renderFreshAppraisal(result, data);
+                // Wire up the comps-toggle and any other interactive
+                // children we just injected.
+                result.querySelectorAll(".comps-toggle").forEach(function (el) {
+                    el.addEventListener("click", onCompsToggleClick);
+                });
                 btn.textContent = "Re-appraise";
             } else {
                 result.textContent = "Failed: " + (data.error || "unknown error");
@@ -186,6 +164,88 @@
             spinner.hidden = true;
             btn.disabled = false;
         }
+    }
+
+    function renderFreshAppraisal(container, data) {
+        const score = data.deal_score;
+        const klass = score >= 70 ? "score-high"
+                    : score >= 50 ? "score-mid" : "score-low";
+        const ratio = data.ratio || 0;
+        const bd = data.breakdown || {};
+        const asking = bd.asking_price;
+        const fair = data.fair_value;
+        const conf = data.confidence || bd.confidence_label;
+        const confPm = data.confidence_pm || bd.confidence_pm;
+
+        // Three-dot confidence indicator markup matching the SSR cards.
+        let confMarkup = "";
+        if (conf) {
+            const lit = (level) =>
+                (conf === "high" || (conf === "medium" && level !== "high") ||
+                 (conf === "low" && level === "low")) ? "lit" : "";
+            confMarkup =
+                '<div class="confidence-bar conf-' + conf + '" ' +
+                'title="confidence interval ±' + confPm + ' on the score; based on n=' + (bd.sample_size || 0) + ' comp(s)">' +
+                '<div class="conf-dots">' +
+                    '<span class="conf-dot ' + lit("low") + '"></span>' +
+                    '<span class="conf-dot ' + lit("medium") + '"></span>' +
+                    '<span class="conf-dot ' + lit("high") + '"></span>' +
+                '</div>' +
+                '<span class="conf-label">' + escapeHtml(conf) + ' confidence</span>' +
+                '<span class="conf-detail muted">n=' + (bd.sample_size || 0) +
+                (bd.outliers_dropped ? ' (−' + bd.outliers_dropped + ' outlier' +
+                    (bd.outliers_dropped > 1 ? 's' : '') + ')' : '') +
+                '</span></div>';
+        }
+
+        const compsToggle = (data.search_term && data.comp_sample_size) ?
+            '<button class="comps-toggle muted" type="button" ' +
+                'data-comp-term="' + escapeHtml(data.search_term) + '" ' +
+                'data-comp-source="marketplace" ' +
+                'title="See the listings this median is based on">' +
+                data.comp_sample_size + ' comp(s)' +
+                (data.outliers_dropped ? ', ' + data.outliers_dropped + ' outlier(s) dropped' : '') +
+                (data.comp_median ? ' · raw median $' + Math.round(data.comp_median) : '') +
+                ' ▾</button>' +
+            '<div class="comps-pane" hidden>' +
+                '<div class="comps-spinner" hidden>loading…</div>' +
+                '<div class="comps-content"></div>' +
+            '</div>'
+            : '';
+
+        const dataWarn = bd.data_quality_poor ?
+            '<div class="data-warning" title="IQR exceeds trimmed median; comp distribution is too dispersed for a single number to be reliable. Consider the percentile rank instead.">⚠ comps too varied — score unreliable</div>'
+            : '';
+
+        const pctRank = (bd.percentile_rank !== null && bd.percentile_rank !== undefined) ?
+            '<div class="pct-rank">Asking sits at the <strong>' +
+            Math.round(bd.percentile_rank * 100) + '<sup>th</sup></strong> percentile of comps ' +
+            '<span class="pct-detail muted">(cheaper than ' +
+            Math.round((1 - bd.percentile_rank) * 100) + '% of similar listings)</span></div>'
+            : '';
+
+        const finalKlass = bd.data_quality_poor ? "score-low" : klass;
+
+        container.innerHTML =
+            '<div class="appraisal-display ' + finalKlass + '">' +
+            '<div class="score-row">' +
+                '<span class="score-num">' + score + '</span>' +
+                (confPm ? '<span class="score-pm">±' + confPm + '</span>' : '') +
+                '<span class="score-label">deal score</span>' +
+                (fair ? '<span class="score-fair">fair: $' + Math.round(fair) + '</span>' : '') +
+            '</div>' +
+            dataWarn +
+            pctRank +
+            confMarkup +
+            (asking && fair ?
+                '<div class="score-math">' +
+                    '<span class="math-eq">$' + Math.round(asking) + ' ÷ $' + Math.round(fair) + ' = ratio <strong>' + ratio.toFixed(2) + '</strong></span>' +
+                    '<span class="math-source muted">' + escapeHtml(data.fair_value_source || "") + '</span>' +
+                '</div>'
+            : '') +
+            (data.note ? '<div class="score-note">' + escapeHtml(data.note) + '</div>' : '') +
+            compsToggle +
+            '</div>';
     }
 
     function escapeHtml(s) {

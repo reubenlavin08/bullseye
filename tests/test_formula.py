@@ -213,3 +213,50 @@ def test_cap_does_not_inflate_low_scores():
     # asking $300 / fair $200 = ratio 1.5 -> raw_score ~15
     # cap is 100 - 18 = 82. min(15, 82) = 15.
     assert s.deal_score < 30
+
+
+# --- Data-quality flag (heterogeneous comps) ----------------------------
+
+def test_data_quality_flagged_when_iqr_exceeds_median():
+    """Vintage electric fishing motor: comps span $50-$2000 evenly.
+    IQR will exceed median; flag should fire."""
+    comp = _comp(n=10, median=400.0, trimmed_median=400.0, iqr=600.0)
+    s = compute_score(asking_price=300.0, comp=comp)
+    assert s.data_quality_poor is True
+    assert s.iqr_to_median_ratio is not None
+    assert s.iqr_to_median_ratio > 1.0
+
+
+def test_data_quality_clean_when_iqr_is_tight():
+    """Tight comp distribution (homogeneous category) -> flag stays off."""
+    comp = _comp(n=10, median=400.0, trimmed_median=400.0, iqr=80.0)
+    s = compute_score(asking_price=300.0, comp=comp)
+    assert s.data_quality_poor is False
+    assert s.iqr_to_median_ratio is not None
+    assert s.iqr_to_median_ratio < 1.0
+
+
+# --- Percentile rank ----------------------------------------------------
+
+def test_percentile_rank_in_middle_of_range():
+    """Asking equal to median -> percentile rank ~ 0.50."""
+    comp = _comp(n=10, median=400.0, trimmed_median=400.0, iqr=100.0)
+    s = compute_score(asking_price=400.0, comp=comp)
+    assert s.percentile_rank is not None
+    assert 0.4 <= s.percentile_rank <= 0.6
+
+
+def test_percentile_rank_below_min():
+    """Asking less than the cheapest comp -> percentile rank 0."""
+    comp = _comp(n=10, median=400.0, trimmed_median=400.0, iqr=100.0)
+    # _comp helper sets minimum = median * 0.5 = 200
+    s = compute_score(asking_price=10.0, comp=comp)
+    assert s.percentile_rank == 0.0
+
+
+def test_percentile_rank_above_max():
+    """Asking more than the priciest comp -> percentile rank 1.0."""
+    comp = _comp(n=10, median=400.0, trimmed_median=400.0, iqr=100.0)
+    # maximum from helper = median * 2 = 800
+    s = compute_score(asking_price=5000.0, comp=comp)
+    assert s.percentile_rank == 1.0

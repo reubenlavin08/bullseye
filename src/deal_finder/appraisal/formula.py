@@ -79,7 +79,24 @@ class ScoreBreakdown:
     trimmed_median: float | None
     iqr: float | None
     asking_discount: float
-    formula_version: str = "1.0"
+    # Data-quality flag for heterogeneous comp sets ("vintage X" cases
+    # where every unit is unique). True when IQR > median, meaning the
+    # comp distribution is too dispersed for a single deal-score number
+    # to be meaningful. The score is still computed but the UI should
+    # surface percentile_rank as the primary metric instead.
+    data_quality_poor: bool = False
+    iqr_to_median_ratio: float | None = None
+    # Percentile rank of `asking_price` within the comp set. 0.0 = cheaper
+    # than every comp; 1.0 = more expensive than every comp. More useful
+    # than deal_score for heterogeneous categories.
+    percentile_rank: float | None = None
+    formula_version: str = "1.1"
+
+
+# IQR / median above this threshold flags the comp set as too varied
+# for a reliable single-number deal score (e.g. "vintage electric
+# fishing motor" where every unit is unique).
+DATA_QUALITY_IQR_THRESHOLD = 1.0
 
 
 # --- Public API -----------------------------------------------------------
@@ -131,6 +148,23 @@ def compute_score(
     capped = min(raw_score, confidence_cap)
     deal_score = max(0, min(100, int(round(capped))))
 
+    # Data-quality flag: when IQR > median, the comp set is too
+    # heterogeneous for a single number to mean much. Common for
+    # genuine vintage / custom / collector categories. We compute the
+    # score anyway (statistically valid) but flag it so the UI can
+    # downplay the score and lead with percentile rank instead.
+    iqr_ratio = None
+    data_quality_poor = False
+    if comp.iqr is not None and comp.trimmed_median:
+        iqr_ratio = comp.iqr / comp.trimmed_median
+        if iqr_ratio > DATA_QUALITY_IQR_THRESHOLD:
+            data_quality_poor = True
+
+    # Percentile rank of asking inside the comp distribution.
+    pct_rank = None
+    if comp.median is not None and comp.sample_size > 0:
+        pct_rank = _percentile_rank(asking_price, comp)
+
     return ScoreBreakdown(
         asking_price=asking_price,
         fair_value=fair_value,
@@ -146,7 +180,49 @@ def compute_score(
         trimmed_median=comp.trimmed_median,
         iqr=comp.iqr,
         asking_discount=asking_discount,
+        data_quality_poor=data_quality_poor,
+        iqr_to_median_ratio=iqr_ratio,
+        percentile_rank=pct_rank,
     )
+
+
+def _percentile_rank(value: float, comp: CompStats) -> float | None:
+    """Approximate percentile rank using the available stats.
+
+    True percentile rank requires the full sample, which we don't have
+    here (CompStats is aggregated). We approximate using p10, q1,
+    median, q3, p90 as anchor points and linearly interpolate.
+    Returns None if we can't anchor anywhere.
+    """
+    anchors: list[tuple[float, float]] = []
+    if comp.minimum is not None:
+        anchors.append((comp.minimum, 0.0))
+    if comp.p10 is not None:
+        anchors.append((comp.p10, 0.10))
+    if comp.q1 is not None:
+        anchors.append((comp.q1, 0.25))
+    if comp.median is not None:
+        anchors.append((comp.median, 0.50))
+    if comp.q3 is not None:
+        anchors.append((comp.q3, 0.75))
+    if comp.p90 is not None:
+        anchors.append((comp.p90, 0.90))
+    if comp.maximum is not None:
+        anchors.append((comp.maximum, 1.0))
+    if len(anchors) < 2:
+        return None
+    anchors.sort()
+    if value <= anchors[0][0]:
+        return 0.0
+    if value >= anchors[-1][0]:
+        return 1.0
+    for (x0, y0), (x1, y1) in zip(anchors, anchors[1:]):
+        if x0 <= value <= x1:
+            if x1 == x0:
+                return y0
+            t = (value - x0) / (x1 - x0)
+            return y0 + (y1 - y0) * t
+    return None
 
 
 def llm_needed(comp: CompStats) -> bool:
