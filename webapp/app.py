@@ -433,12 +433,24 @@ def _compute_poll_timer() -> dict:
         state = "slow_start"
         next_in = max(0, slow_start_min - seconds_since_last_attempt)
     else:
-        # Bound by coordinator tick — at most 1 tick away.
+        # 'tick' state — waiting for the next coordinator firing.
+        # APScheduler's interval trigger fires at fixed offsets from
+        # job start, so the next tick is roughly:
+        #   tick_s - (seconds_since_last_attempt mod tick_s)
+        # Using last_attempt (latest poll OR rate-limit) as the
+        # anchor: the coordinator only emits one of those each tick
+        # it actually fires, so this approximates next_run_time
+        # without reaching into APScheduler across processes. Returns
+        # a value that DECREASES across syncs, so the JS countdown
+        # anchor stays put and we don't get the 20→16→20 bounce.
         state = "tick"
-        # Without an in-process hook to APScheduler, the worst case is
-        # tick_s seconds from now. The actual fire could be sooner but
-        # we don't have the next_run_time across processes.
-        next_in = DEFAULT_TICK
+        if last_attempt is not None:
+            into_tick = seconds_since_last_attempt % DEFAULT_TICK
+            # If we're exactly on a tick boundary (rare), call it 0
+            # so the JS shows "now" rather than a misleading full tick.
+            next_in = (DEFAULT_TICK - into_tick) if into_tick > 0 else 0
+        else:
+            next_in = DEFAULT_TICK
 
     # FB health classification — combines the most recent HTML probe
     # result with whether GraphQL is currently rate-limiting. The two
