@@ -25,8 +25,9 @@ digest — that's the key trick.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 
 from ..db.connection import get_conn
@@ -34,6 +35,17 @@ from ..db.geo import geocode_city, haversine_km
 from .email import send_email
 
 logger = logging.getLogger(__name__)
+
+
+# How long to hold pending matches before sending, to give multiple
+# above-threshold listings a chance to batch into one email. Bounded
+# delay: send the email exactly DIGEST_BATCH_HOLD_S after the OLDEST
+# pending match was scored. So a single match in isolation gets emailed
+# after the hold; a burst of 5 matches all collapses into one email
+# at most HOLD_S after the first one.
+#
+# Set to 0 to disable batching (immediate-send legacy behavior).
+DIGEST_BATCH_HOLD_S = int(os.environ.get("DIGEST_BATCH_HOLD_S", "60"))
 
 
 @dataclass
@@ -132,7 +144,8 @@ def collect_pending_for_email(email: str) -> list[DigestMatch]:
                           us.keyword,
                           s.score_threshold,
                           us.latitude, us.longitude, us.radius_km,
-                          us.price_min, us.price_max
+                          us.price_min, us.price_max,
+                          l.appraised_at
                    FROM subscribers s
                    JOIN user_searches us ON us.id = s.search_id
                    JOIN listings l ON l.search_id = s.search_id
@@ -150,6 +163,7 @@ def collect_pending_for_email(email: str) -> list[DigestMatch]:
 
     matches: list[DigestMatch] = []
     suppress_by_reason: dict[str, list[str]] = {}
+    appraised_at_per_match: list[datetime] = []
     for r in raw_rows:
         bd = r[10] or {}
         price = float(r[2]) if r[2] is not None else None
@@ -180,6 +194,8 @@ def collect_pending_for_email(email: str) -> list[DigestMatch]:
             listed_at=r[9],
             keyword=r[11],
         ))
+        if r[18] is not None:
+            appraised_at_per_match.append(r[18])
 
     # Suppress out-of-bounds listings so they never get re-checked.
     for reason, ids in suppress_by_reason.items():
@@ -188,6 +204,23 @@ def collect_pending_for_email(email: str) -> list[DigestMatch]:
             "suppressed %d out-of-bounds listing(s) for %s: %s",
             len(ids), email, reason,
         )
+
+    # Batching hold-off: if the OLDEST eligible match is younger than
+    # DIGEST_BATCH_HOLD_S, hold this tick. Multiple matches arriving
+    # within the window naturally bundle into one email. Bounds the
+    # email delay to HOLD_S.
+    if matches and DIGEST_BATCH_HOLD_S > 0 and appraised_at_per_match:
+        oldest = min(appraised_at_per_match)
+        # Postgres TIMESTAMPTZ comes back tz-aware; subtract from now(utc).
+        if oldest.tzinfo is None:
+            oldest = oldest.replace(tzinfo=timezone.utc)
+        age_s = (datetime.now(timezone.utc) - oldest).total_seconds()
+        if age_s < DIGEST_BATCH_HOLD_S:
+            logger.debug(
+                "digest hold for %s: %d match(es), oldest %ds old < %ds (waiting to batch)",
+                email, len(matches), int(age_s), DIGEST_BATCH_HOLD_S,
+            )
+            return []
 
     return matches
 

@@ -327,25 +327,48 @@ def api_dashboard_summary():
             )
             last_event = cur.fetchone()[0]
 
+            # Most-recent scheduler_boot — anchors the "since boot" counts
+            # so a restart doesn't make it look like history was lost. The
+            # DB still has everything from prior boots; this just gives a
+            # natural "this run" framing.
+            cur.execute(
+                """SELECT MAX(created_at) FROM scheduler_events
+                   WHERE event_type = 'scheduler_boot'""",
+            )
+            last_boot = cur.fetchone()[0]
+            # Fallback for the first-ever-run case where there's no
+            # scheduler_boot yet — use first event timestamp.
+            if last_boot is None:
+                cur.execute("SELECT MIN(created_at) FROM scheduler_events")
+                last_boot = cur.fetchone()[0]
+
             cur.execute(
                 """SELECT
                        COUNT(*) FILTER (WHERE event_type='poll'
                             AND created_at >= NOW() - INTERVAL '1 hour'),
+                       COUNT(*) FILTER (WHERE event_type='poll'
+                            AND created_at >= COALESCE(%s, '-infinity'::timestamptz)),
                        COUNT(*) FILTER (WHERE event_type='fb_rate_limit'
                             AND created_at >= NOW() - INTERVAL '1 hour'),
                        COUNT(*) FILTER (WHERE event_type='fb_rate_limit'
                             AND created_at >= NOW() - INTERVAL '24 hours'),
+                       COUNT(*) FILTER (WHERE event_type='fb_rate_limit'
+                            AND created_at >= COALESCE(%s, '-infinity'::timestamptz)),
+                       COUNT(*) FILTER (WHERE event_type='fb_rate_limit'),
                        COUNT(*) FILTER (WHERE event_type='email_sent'
                             AND created_at >= NOW()::date),
+                       COUNT(*) FILTER (WHERE event_type='email_sent'),
                        COUNT(*) FILTER (WHERE event_type='email_failed'
                             AND created_at >= NOW()::date),
                        COUNT(*) FILTER (WHERE event_type='pipeline_error'
                             AND created_at >= NOW() - INTERVAL '24 hours')
                    FROM scheduler_events""",
+                (last_boot, last_boot),
             )
-            polls_1h, rate_1h, rate_24h, emails_today, email_fail_today, errors_24h = (
-                cur.fetchone()
-            )
+            (polls_1h, polls_since_boot,
+             rate_1h, rate_24h, rate_since_boot, rate_total,
+             emails_today, emails_total,
+             email_fail_today, errors_24h) = cur.fetchone()
 
             cur.execute(
                 """SELECT
@@ -379,12 +402,17 @@ def api_dashboard_summary():
         "total_watches": total_w,
         "rates": {
             "polls_last_1h": polls_1h,
+            "polls_since_boot": polls_since_boot,
             "rate_limits_last_1h": rate_1h,
             "rate_limits_last_24h": rate_24h,
+            "rate_limits_since_boot": rate_since_boot,
+            "rate_limits_total": rate_total,
             "emails_today": emails_today,
+            "emails_total": emails_total,
             "email_failures_today": email_fail_today,
             "pipeline_errors_24h": errors_24h,
         },
+        "scheduler_booted_at": last_boot.isoformat() if last_boot else None,
         "funnel_today": {
             "scraped": scraped,
             "rejected": rej,

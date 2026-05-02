@@ -41,10 +41,17 @@
                 <span class="status-text">checking…</span>
             </div>
             <div class="status-stat"><span class="stat-num" id="stat-watches">—</span><small>active watches</small></div>
-            <div class="status-stat"><span class="stat-num" id="stat-polls">—</span><small>polls (1h)</small></div>
-            <div class="status-stat"><span class="stat-num warn" id="stat-rate">—</span><small>rate-limits (1h)</small></div>
+            <div class="status-stat" title="Polls since this scheduler boot. Total since DB inception in tooltip.">
+                <span class="stat-num" id="stat-polls">—</span><small id="stat-polls-label">polls (run)</small>
+            </div>
+            <div class="status-stat" title="Rate-limit hits this run. Hover for total since DB inception.">
+                <span class="stat-num warn" id="stat-rate">—</span><small id="stat-rate-label">rate-lim (run)</small>
+            </div>
             <div class="status-stat"><span class="stat-num good" id="stat-emails">—</span><small>emails today</small></div>
             <div class="status-stat"><span class="stat-num bad" id="stat-errors">—</span><small>errors (24h)</small></div>
+            <div class="status-stat" title="When this scheduler instance booted; counts above are cumulative since.">
+                <span class="stat-num" id="stat-uptime">—</span><small>uptime</small>
+            </div>
             <div class="status-stat"><span class="stat-num" id="stat-last">—</span><small>last event</small></div>
         </section>
 

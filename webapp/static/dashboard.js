@@ -35,6 +35,19 @@
         return Math.floor(h / 24) + "d ago";
     }
 
+    // Compact "Nh Mm" / "Nd Hh" uptime formatter for the status strip.
+    function formatUptime(iso) {
+        if (!iso) return "—";
+        const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+        const m = Math.floor(s / 60);
+        const h = Math.floor(m / 60);
+        const d = Math.floor(h / 24);
+        if (d > 0) return `${d}d ${h % 24}h`;
+        if (h > 0) return `${h}h ${m % 60}m`;
+        if (m > 0) return `${m}m`;
+        return `${s}s`;
+    }
+
     // --- 1 + 2: summary (status strip + funnel) -----------------------
 
     async function refreshSummary() {
@@ -49,10 +62,34 @@
             const r = data.rates || {};
             document.getElementById("stat-watches").textContent =
                 `${data.active_watches}/${data.total_watches}`;
-            document.getElementById("stat-polls").textContent = fmtNum(r.polls_last_1h);
-            document.getElementById("stat-rate").textContent = fmtNum(r.rate_limits_last_1h);
-            document.getElementById("stat-emails").textContent = fmtNum(r.emails_today);
+
+            // Polls — show "since boot" as the primary number, with last-1h
+            // and total in the tooltip so nothing feels like it disappears.
+            const pollsEl = document.getElementById("stat-polls");
+            pollsEl.textContent = fmtNum(r.polls_since_boot);
+            pollsEl.parentElement.title =
+                `polls this run: ${fmtNum(r.polls_since_boot)}\n` +
+                `last 1h: ${fmtNum(r.polls_last_1h)}`;
+
+            // Rate-limits — primary is "this run" so leaving the page can't
+            // make it look like rate-limits got dropped from history.
+            const rateEl = document.getElementById("stat-rate");
+            rateEl.textContent = fmtNum(r.rate_limits_since_boot);
+            rateEl.parentElement.title =
+                `rate-limits this run: ${fmtNum(r.rate_limits_since_boot)}\n` +
+                `last 1h: ${fmtNum(r.rate_limits_last_1h)}\n` +
+                `last 24h: ${fmtNum(r.rate_limits_last_24h)}\n` +
+                `total in DB: ${fmtNum(r.rate_limits_total)}`;
+
+            const emailsEl = document.getElementById("stat-emails");
+            emailsEl.textContent = fmtNum(r.emails_today);
+            emailsEl.parentElement.title =
+                `emails today: ${fmtNum(r.emails_today)}\n` +
+                `total ever sent: ${fmtNum(r.emails_total)}`;
+
             document.getElementById("stat-errors").textContent = fmtNum(r.pipeline_errors_24h);
+            document.getElementById("stat-uptime").textContent =
+                data.scheduler_booted_at ? formatUptime(data.scheduler_booted_at) : "—";
             document.getElementById("stat-last").textContent = timeAgo(data.last_event_iso);
 
             // Funnel
@@ -137,7 +174,11 @@
     async function refreshEvents() {
         if (activeTailSource !== "events") return;
         try {
-            const url = "/api/dashboard/events?since=" + lastEventId + "&limit=80";
+            // Initial load grabs 250 (covers a multi-hour gap); incremental
+            // ticks afterward only fetch new ones via since=lastEventId so
+            // this is cheap.
+            const limit = lastEventId === 0 ? 250 : 80;
+            const url = "/api/dashboard/events?since=" + lastEventId + "&limit=" + limit;
             const data = await (await fetch(url)).json();
             const events = data.events || [];
             if (events.length === 0) return;
@@ -152,7 +193,8 @@
                 if (e.id > lastEventId) lastEventId = e.id;
             });
             // Cap displayed rows so the DOM doesn't grow unbounded.
-            while (feed.children.length > 200) {
+            // 500 covers ~2-3h of busy traffic without scrolling falling off.
+            while (feed.children.length > 500) {
                 feed.removeChild(feed.lastChild);
             }
         } catch (err) {
@@ -163,7 +205,7 @@
     async function refreshRawLog() {
         if (activeTailSource !== "log") return;
         try {
-            const data = await (await fetch("/api/dashboard/log/tail?n=200")).json();
+            const data = await (await fetch("/api/dashboard/log/tail?n=500")).json();
             const feed = document.getElementById("event-feed");
             if (!data.exists) {
                 feed.innerHTML =
@@ -307,7 +349,9 @@
 
     async function refreshAppraisalFeed() {
         try {
-            const url = `/api/dashboard/appraisal-feed?filter=${appraisalFilter}&limit=60`;
+            // 200 listings keeps a multi-hour history visible. The feed
+            // itself is scrollable; the API caps at 200 anyway.
+            const url = `/api/dashboard/appraisal-feed?filter=${appraisalFilter}&limit=200`;
             const data = await (await fetch(url)).json();
             const wrap = document.getElementById("appraisal-feed");
             const listings = data.listings || [];
