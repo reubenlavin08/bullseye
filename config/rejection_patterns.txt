@@ -37,7 +37,47 @@
 \b(tutoring|lessons|coaching|training)\s+(available|offered|sessions)\b
 \b(I|we)\s+teach\b
 
-# Rentals / monthly fees (these are services, not item sales)
-\bper\s+(month|week|day)\b
-\bmonthly\s+(fee|rate|payment|rental)\b
-\brent\s+(it|this)\s+for\b
+# --- Rentals / leases (not for sale) -------------------------------------
+# These catch both explicit ("for rent") and implicit ($X/mo) rental
+# listings. Marketplace lets people post rentals in the same feed as
+# items, so we filter them out aggressively.
+
+# Explicit rental vocabulary
+\bfor\s+rent\b
+\bfor\s+lease\b
+\b(renting|leasing|rental|leased|rented)\b
+\bavailable\s+(monthly|weekly|nightly|daily|to\s+rent|to\s+lease|for\s+rent|for\s+lease)\b
+\b(short|long)[\s-]?term\s+(rental|rent|lease)\b
+\b(roommate|sublet|sublease|sub-?letting)\b
+\bairbnb\b
+
+# Money-per-time signals (any of these = rental, not sale)
+\bper\s+(month|week|day|night)\b
+\bmonthly\s+(fee|rate|payment|rental|rent)\b
+\b(weekly|nightly|daily)\s+rate\b
+\brent\s+(it|this|out)?\s*(for|@|at)\b
+# Catches "$50/mo", "$1,500/month", "$200 / wk", "$80/night", etc.
+\$\s*[\d,]+(\.\d+)?\s*/\s*(mo|month|months|wk|week|weeks|d|day|days|nt|night|nights)\b
+\$\s*[\d,]+(\.\d+)?\s+(per|/|a)\s+(mo|month|wk|week|d|day|nt|night)\b
+
+# Deposits / lease terms (signal a rental even if price is omitted)
+\b(security|cleaning|damage|pet)\s+deposit\b
+\b(first|last)\s+(month|months)\s+(rent|deposit)\b
+\b\d+[\s-]?(month|year)\s+(lease|rental|term|minimum)\b
+\butilities?\s+(included|not\s+included|extra)\b
+
+# --- "Make me an offer" placeholders (no real anchor price) -------------
+# These are stronger than just "obo" — they're phrases that almost
+# exclusively appear when the seller lists $0 or $1 and refuses to
+# name a price. Generic "or best offer" / "obo" stays allowed because
+# it normally accompanies a real asking price.
+
+\bname\s+your\s+(own\s+)?price\b
+\bmake\s+(me\s+)?(an?\s+)?(reasonable|fair|serious|decent|nice|generous|good)?\s*offer\b
+\bsend\s+(me\s+)?(your\s+)?(best\s+)?offers?\b
+\bopen\s+to\s+(all\s+|reasonable\s+|any\s+)?offers?\b
+\bany\s+(reasonable\s+|fair\s+|serious\s+)?offers?\s+(welcome|considered|accepted|ok|okay)\b
+\b(highest|best)\s+offer\s+(wins|takes|gets|by)\b
+\bwhat\s+(will\s+you|do\s+you|can\s+you)\s+(give|offer|pay)\b
+\bwhat['']?s?\s+it\s+worth\s+to\s+you\b
+\bprice\s+is\s+negotiable\s*[.!,]?\s*$

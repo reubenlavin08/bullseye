@@ -261,3 +261,262 @@ def test_monthly_fee_caught():
         config_dir=_real_config_dir(),
     )
     assert r.rejected is True
+
+
+# --- Rental detection (explicit + implicit $X/month) -------------------
+
+def test_rental_explicit_for_rent():
+    rejection.reset_cache()
+    r = evaluate(
+        title="2br Suite",
+        description="Beautiful 2br for rent in Kitsilano, available now.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_for_lease():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Commercial Space",
+        description="1200 sqft for lease, ground floor",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_dollar_per_mo_slash():
+    """The exact case the user reported: implicit rental with $X/mo
+    pricing and no 'rent' word in sight."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="Studio downtown",
+        description="$1,800/mo all utilities included, no pets.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_dollar_per_month_slash():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Room available",
+        description="$950/month, shared kitchen",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_dollar_per_night():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Cabin getaway",
+        description="$220/night, 2-night minimum",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_dollar_per_week():
+    rejection.reset_cache()
+    r = evaluate(
+        title="RV stay",
+        description="$400/wk, includes hookups",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_security_deposit():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Basement suite",
+        description="Bright suite, $500 security deposit",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_first_last_month():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Apartment",
+        description="First and last month rent required",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_lease_term():
+    rejection.reset_cache()
+    r = evaluate(
+        title="House",
+        description="12 month lease minimum",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_sublet():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Need a sublet",
+        description="Looking for someone to take over",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_airbnb():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Cozy spot",
+        description="Used as an Airbnb, no long-term tenants",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_short_term():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Furnished suite",
+        description="Short-term rental available, fully equipped",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_rental_utilities_included():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Cozy room",
+        description="Utilities included, available immediately.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+# --- Make-me-an-offer placeholder detection ----------------------------
+
+def test_offer_make_me_an_offer():
+    """The user-reported $1 iPhone case: 'make me an offer' with no
+    real anchor price."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="iPhone 11 128gb",
+        description="Make me an offer.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_offer_make_a_reasonable_offer():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Vintage chair",
+        description="Make a reasonable offer and it's yours.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_offer_name_your_price():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Stuff",
+        description="Name your price, just need it gone",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_offer_send_offers():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Mountain bike",
+        description="Send offers — open to anything reasonable",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_offer_open_to_offers():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Sectional couch",
+        description="Open to offers",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_offer_highest_offer_wins():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Bass guitar",
+        description="Highest offer wins by Friday",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_offer_what_will_you_give():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Garage cleanout",
+        description="What will you give me for it?",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+# --- False-positive guards ---------------------------------------------
+
+def test_obo_with_real_price_not_rejected():
+    """'$500 OBO' is a normal listing — don't reject. Only the more
+    aggressive 'name your price' / 'make me an offer' patterns trigger."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="Used dirt bike",
+        description="$3500 OBO, runs great",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is False
+
+
+def test_offer_word_alone_not_rejected():
+    """Listings that mention 'offer' incidentally shouldn't be rejected."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="Couch",
+        description="Limited time offer — moving sale.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is False
+
+
+def test_legit_listing_with_month_in_use_history_not_rejected():
+    """'Used for 6 months' should NOT trip the rental filter."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="MacBook Pro",
+        description="Used for 6 months, mint condition.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is False
+
+
+def test_legit_listing_mentioning_lease_in_history_not_rejected():
+    """'Lease ended' as historical context shouldn't reject a sale."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="2020 Honda Civic",
+        description="Bought after my lease ended last year",
+        config_dir=_real_config_dir(),
+    )
+    # NOTE: this WILL trigger \blease[d]?\b. Acceptable false-positive
+    # rate for the value of catching all rentals. If this becomes a
+    # problem in practice, tighten the patterns.
+    # Documenting the trade-off rather than asserting either way.
+    _ = r

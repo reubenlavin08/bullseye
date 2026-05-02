@@ -193,13 +193,15 @@ def _process_new_listing(
                             (asking, price_extracted, sl.id),
                         )
 
-    # If asking is still <= 0 after price recovery attempts, we can't
-    # score it — the formula needs a positive asking price. Persist as
-    # unscoreable rather than crashing the loop.
-    if asking <= 0:
+    # If asking is still a placeholder ($0 or $1) after price recovery
+    # attempts, we can't score it — the formula needs a real asking
+    # price. $1 listings with no recoverable real price almost always
+    # mean "DM me / make an offer" and would otherwise score 0/100 with
+    # 0th percentile, which is misleading.
+    if asking <= 1.0:
         logger.info(
-            "%s unscoreable: no recoverable asking price | %s",
-            sl.id, pl.title[:60],
+            "%s unscoreable: no recoverable asking price (placeholder $%s) | %s",
+            sl.id, asking, pl.title[:60],
         )
         with get_conn() as conn:
             with conn:

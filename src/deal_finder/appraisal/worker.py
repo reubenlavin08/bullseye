@@ -242,6 +242,28 @@ def _process_one(
                              price_extracted, listing_id),
                         )
 
+    # If asking is still a $0/$1 placeholder after JIT recovery, refuse
+    # to score. These are almost always "DM me / make an offer" listings
+    # with no real anchor price; running the formula on them produces
+    # misleading 0th-percentile scores.
+    if asking <= 1.0:
+        logger.info(
+            "%s | UNSCOREABLE: placeholder price $%s, no real ask | %s",
+            listing_id, asking, title[:60],
+        )
+        with get_conn() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE listings SET
+                              appraised = TRUE,
+                              appraised_at = NOW(),
+                              appraisal_note = '[unscoreable] no recoverable asking price'
+                           WHERE id = %s""",
+                        (listing_id,),
+                    )
+        return False
+
     # 1. Normalize the title to a clean comp-search keyword.
     search_term = normalize_title(title) or title
     logger.debug("normalize %s: %r -> %r", listing_id, title, search_term)
