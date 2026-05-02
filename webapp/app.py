@@ -271,6 +271,231 @@ def detail(listing_id: str):
 _SCHEDULER_LOG_PATH = _REPO / "logs" / "scheduler.log"
 
 
+@app.route("/dashboard")
+def dashboard_page():
+    """Render the observability dashboard. The page shells out to the
+    /api/dashboard/* endpoints for data so the markup stays static and
+    the JS just polls + repaints."""
+    return render_template("dashboard.html")
+
+
+@app.route("/api/dashboard/summary")
+def api_dashboard_summary():
+    """Status strip + pipeline funnel + alive check.
+
+    Light enough to poll every 5s. Aggregates a few counts from
+    scheduler_events + listings.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Is the scheduler alive? -> any 'poll' or 'reload' event in the
+            # last 90 seconds.
+            cur.execute(
+                """SELECT MAX(created_at) FROM scheduler_events
+                   WHERE event_type IN ('poll','reload','safety_drain','scheduler_boot')""",
+            )
+            last_event = cur.fetchone()[0]
+
+            cur.execute(
+                """SELECT
+                       COUNT(*) FILTER (WHERE event_type='poll'
+                            AND created_at >= NOW() - INTERVAL '1 hour'),
+                       COUNT(*) FILTER (WHERE event_type='fb_rate_limit'
+                            AND created_at >= NOW() - INTERVAL '1 hour'),
+                       COUNT(*) FILTER (WHERE event_type='fb_rate_limit'
+                            AND created_at >= NOW() - INTERVAL '24 hours'),
+                       COUNT(*) FILTER (WHERE event_type='email_sent'
+                            AND created_at >= NOW()::date),
+                       COUNT(*) FILTER (WHERE event_type='email_failed'
+                            AND created_at >= NOW()::date),
+                       COUNT(*) FILTER (WHERE event_type='pipeline_error'
+                            AND created_at >= NOW() - INTERVAL '24 hours')
+                   FROM scheduler_events""",
+            )
+            polls_1h, rate_1h, rate_24h, emails_today, email_fail_today, errors_24h = (
+                cur.fetchone()
+            )
+
+            cur.execute(
+                """SELECT
+                       COUNT(*) FILTER (WHERE scraped_at >= NOW()::date) AS scraped,
+                       COUNT(*) FILTER (WHERE rejected = TRUE
+                            AND scraped_at >= NOW()::date) AS rejected,
+                       COUNT(*) FILTER (WHERE appraised = TRUE
+                            AND scraped_at >= NOW()::date) AS appraised,
+                       COUNT(*) FILTER (WHERE deal_score IS NOT NULL
+                            AND deal_score >= 70 AND rejected = FALSE
+                            AND scraped_at >= NOW()::date) AS over_threshold,
+                       COUNT(*) FILTER (WHERE notified = TRUE
+                            AND notified_at >= NOW()::date) AS notified,
+                       COUNT(*) FILTER (WHERE deal_score IS NOT NULL
+                            AND deal_score >= 70 AND rejected = FALSE
+                            AND notified = FALSE) AS pending
+                   FROM listings""",
+            )
+            scraped, rej, appr, over, notif, pending = cur.fetchone()
+
+            cur.execute(
+                "SELECT COUNT(*) FILTER (WHERE active=TRUE), COUNT(*) FROM user_searches",
+            )
+            active_w, total_w = cur.fetchone()
+
+    now = datetime.now(timezone.utc) if False else None  # noqa
+    return jsonify({
+        "alive": _is_alive(last_event),
+        "last_event_iso": last_event.isoformat() if last_event else None,
+        "active_watches": active_w,
+        "total_watches": total_w,
+        "rates": {
+            "polls_last_1h": polls_1h,
+            "rate_limits_last_1h": rate_1h,
+            "rate_limits_last_24h": rate_24h,
+            "emails_today": emails_today,
+            "email_failures_today": email_fail_today,
+            "pipeline_errors_24h": errors_24h,
+        },
+        "funnel_today": {
+            "scraped": scraped,
+            "rejected": rej,
+            "appraised": appr,
+            "over_threshold": over,
+            "notified": notif,
+            "pending_unsent": pending,
+        },
+    })
+
+
+def _is_alive(last_event) -> bool:
+    """Heuristic: scheduler is 'alive' if it produced an event in the
+    last 90 seconds. Polls fire at most every 60s; reload every 20s;
+    so 90s comfortably covers either."""
+    if last_event is None:
+        return False
+    from datetime import datetime as _dt, timezone as _tz
+    age = (_dt.now(_tz.utc) - last_event).total_seconds()
+    return age < 90
+
+
+@app.route("/api/dashboard/events")
+def api_dashboard_events():
+    """Event tail for the live feed. ?since=<id> returns only newer rows
+    so the UI can do incremental updates."""
+    try:
+        since = int(request.args.get("since", 0))
+    except (TypeError, ValueError):
+        since = 0
+    try:
+        limit = int(request.args.get("limit", 80))
+    except (TypeError, ValueError):
+        limit = 80
+    limit = max(1, min(limit, 200))
+
+    rows = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT e.id, e.event_type, e.search_id, e.duration_ms,
+                          e.detail, e.created_at, us.keyword
+                   FROM scheduler_events e
+                   LEFT JOIN user_searches us ON us.id = e.search_id
+                   WHERE e.id > %s
+                   ORDER BY e.id DESC
+                   LIMIT %s""",
+                (since, limit),
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0],
+                    "event_type": r[1],
+                    "search_id": r[2],
+                    "duration_ms": r[3],
+                    "detail": r[4],
+                    "created_at": r[5].isoformat() if r[5] else None,
+                    "keyword": r[6],
+                })
+    return jsonify({"events": rows})
+
+
+@app.route("/api/dashboard/per-watch")
+def api_dashboard_per_watch():
+    """Per-watch performance table: polls (24h), success rate, average
+    listings returned, hits, last scrape. Joins user_searches with the
+    last 24h of poll events + listings counts."""
+    rows = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT
+                       us.id, us.keyword, us.active,
+                       COUNT(*) FILTER (
+                            WHERE e.event_type='poll'
+                              AND e.created_at >= NOW() - INTERVAL '24 hours'
+                       ) AS polls_24h,
+                       COUNT(*) FILTER (
+                            WHERE e.event_type='fb_rate_limit'
+                              AND e.created_at >= NOW() - INTERVAL '24 hours'
+                       ) AS rate_lims_24h,
+                       AVG((e.detail->>'raw_count')::int) FILTER (
+                            WHERE e.event_type='poll'
+                              AND e.created_at >= NOW() - INTERVAL '24 hours'
+                       ) AS avg_raw,
+                       (SELECT COUNT(*) FROM listings l
+                            WHERE l.search_id=us.id
+                              AND l.deal_score IS NOT NULL
+                              AND l.deal_score >= 70
+                              AND l.rejected = FALSE
+                              AND l.scraped_at >= NOW() - INTERVAL '24 hours'
+                       ) AS hits_24h,
+                       (SELECT COUNT(*) FROM listings l
+                            WHERE l.search_id=us.id
+                              AND l.scraped_at >= NOW() - INTERVAL '24 hours'
+                       ) AS scraped_24h,
+                       (SELECT MAX(l.scraped_at) FROM listings l
+                            WHERE l.search_id=us.id
+                       ) AS last_scrape
+                   FROM user_searches us
+                   LEFT JOIN scheduler_events e ON e.search_id = us.id
+                   GROUP BY us.id, us.keyword, us.active
+                   ORDER BY us.active DESC, us.id""",
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0],
+                    "keyword": r[1],
+                    "active": bool(r[2]),
+                    "polls_24h": int(r[3] or 0),
+                    "rate_limits_24h": int(r[4] or 0),
+                    "avg_raw": float(r[5]) if r[5] else None,
+                    "hits_24h": int(r[6] or 0),
+                    "scraped_24h": int(r[7] or 0),
+                    "last_scrape_iso": r[8].isoformat() if r[8] else None,
+                })
+    return jsonify({"watches": rows})
+
+
+@app.route("/api/dashboard/score-histogram")
+def api_dashboard_histogram():
+    """Histogram of deal scores from listings appraised in the last 24h.
+    Buckets of 10 (0-9, 10-19, ..., 90-100). Used by the dashboard's
+    score distribution chart."""
+    buckets = [0] * 11   # 0-9, 10-19, ..., 90-100
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT deal_score FROM listings
+                   WHERE deal_score IS NOT NULL
+                     AND rejected = FALSE
+                     AND appraised_at >= NOW() - INTERVAL '24 hours'""",
+            )
+            for (score,) in cur.fetchall():
+                idx = min(int(score) // 10, 10)
+                buckets[idx] += 1
+    labels = [f"{i*10}-{i*10+9}" if i < 10 else "100" for i in range(11)]
+    return jsonify({
+        "buckets": [{"label": l, "count": c} for l, c in zip(labels, buckets)],
+    })
+
+
 @app.route("/api/dashboard/log/tail")
 def api_dashboard_log_tail():
     """Return the last N lines of logs/scheduler.log for the live tail.

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>bullseye · dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Big+Shoulders+Display:wght@600;700;800;900&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;1,9..144,400;1,9..144,500&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dashboard-body">
+    <header class="site-header">
+        <div class="container">
+            <div class="brand-block">
+                <span class="brand">bullseye</span>
+                <span class="subtitle">live observability</span>
+            </div>
+            <nav class="header-nav">
+                <a class="header-pill" href="/">
+                    <span class="pill-dot"></span>
+                    Front page
+                </a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container dashboard">
+        <div class="hero-eyebrow">vol. 02 · scheduler internals · auto-refresh</div>
+        <h1 class="dashboard-h1">Live <em>observability</em>.</h1>
+        <p class="hero-sub" style="margin-bottom:32px;">
+            What the scheduler is doing right now, what's been pulled, what's been
+            scored, what's been emailed. Polls every 5 seconds; live event tail every 2 seconds.
+        </p>
+
+        <!-- 1. Status strip -->
+        <section class="dash-block status-strip" id="status-strip">
+            <div class="status-pill" id="alive-pill" data-state="loading">
+                <span class="status-dot"></span>
+                <span class="status-text">checking…</span>
+            </div>
+            <div class="status-stat"><span class="stat-num" id="stat-watches">—</span><small>active watches</small></div>
+            <div class="status-stat"><span class="stat-num" id="stat-polls">—</span><small>polls (1h)</small></div>
+            <div class="status-stat"><span class="stat-num warn" id="stat-rate">—</span><small>rate-limits (1h)</small></div>
+            <div class="status-stat"><span class="stat-num good" id="stat-emails">—</span><small>emails today</small></div>
+            <div class="status-stat"><span class="stat-num bad" id="stat-errors">—</span><small>errors (24h)</small></div>
+            <div class="status-stat"><span class="stat-num" id="stat-last">—</span><small>last event</small></div>
+        </section>
+
+        <!-- 2. Pipeline funnel -->
+        <section class="dash-block">
+            <div class="dash-block-head">
+                <span class="receipt-stamp">today's pipeline</span>
+                <span class="muted dash-block-sub">scraped → rejected → scored → emailed</span>
+            </div>
+            <div class="funnel" id="funnel">
+                <div class="funnel-step" data-step="scraped">
+                    <div class="funnel-num">—</div><div class="funnel-label">scraped</div>
+                </div>
+                <div class="funnel-arrow">→</div>
+                <div class="funnel-step" data-step="rejected">
+                    <div class="funnel-num">—</div><div class="funnel-label">rejected</div>
+                </div>
+                <div class="funnel-arrow">→</div>
+                <div class="funnel-step" data-step="appraised">
+                    <div class="funnel-num">—</div><div class="funnel-label">appraised</div>
+                </div>
+                <div class="funnel-arrow">→</div>
+                <div class="funnel-step funnel-step-hot" data-step="over_threshold">
+                    <div class="funnel-num">—</div><div class="funnel-label">≥ threshold</div>
+                </div>
+                <div class="funnel-arrow">→</div>
+                <div class="funnel-step funnel-step-good" data-step="notified">
+                    <div class="funnel-num">—</div><div class="funnel-label">emailed</div>
+                </div>
+                <div class="funnel-pending muted" id="funnel-pending"></div>
+            </div>
+        </section>
+
+        <!-- 3. Live event tail -->
+        <section class="dash-block">
+            <div class="dash-block-head">
+                <span class="receipt-stamp">live tail · 2s refresh</span>
+                <div class="dash-tabs">
+                    <button class="dash-tab is-active" data-source="events">Structured events</button>
+                    <button class="dash-tab" data-source="log">Raw log</button>
+                </div>
+            </div>
+            <div class="event-feed" id="event-feed">
+                <div class="muted">connecting…</div>
+            </div>
+        </section>
+
+        <!-- 4. Per-watch performance -->
+        <section class="dash-block">
+            <div class="dash-block-head">
+                <span class="receipt-stamp">per-watch performance · 24h</span>
+                <span class="muted dash-block-sub">click a column header to sort</span>
+            </div>
+            <div class="per-watch-table-wrap">
+                <table class="per-watch-table" id="per-watch-table">
+                    <thead>
+                        <tr>
+                            <th data-sort="keyword">keyword</th>
+                            <th data-sort="polls_24h">polls</th>
+                            <th data-sort="avg_raw">avg listings</th>
+                            <th data-sort="hits_24h">hits</th>
+                            <th data-sort="rate_limits_24h">rate-lims</th>
+                            <th data-sort="last_scrape_iso">last scrape</th>
+                        </tr>
+                    </thead>
+                    <tbody id="per-watch-body">
+                        <tr><td colspan="6" class="muted">loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 5. Score histogram -->
+        <section class="dash-block">
+            <div class="dash-block-head">
+                <span class="receipt-stamp">score distribution · 24h</span>
+                <span class="muted dash-block-sub">all appraised listings</span>
+            </div>
+            <div class="histogram" id="score-histogram">
+                <div class="muted">loading…</div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            <span class="brand">bullseye</span>
+            <span class="muted">live observability · auto-refresh on this page</span>
+            <a href="/">← Front page</a>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
