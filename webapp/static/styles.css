@@ -1064,13 +1064,22 @@ em, .italic {
 .comp-title {
     grid-column: 2; grid-row: 1;
     z-index: 1;
-    color: var(--fg-muted);
+    color: var(--accent);                    /* clearly a link, not body text */
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: rgba(194, 65, 12, 0.45);
+    text-underline-offset: 3px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: pointer;
 }
-
-.comp-title:hover { color: var(--fg); }
+.comp-title:hover {
+    color: var(--accent-strong, var(--accent));
+    text-decoration-style: solid;
+    text-decoration-color: currentColor;
+}
+.comp-title:visited { color: var(--accent); }
 
 .comp-loc { grid-column: 3; grid-row: 1; z-index: 1; font-size: 9px; }
 

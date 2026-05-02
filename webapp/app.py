@@ -287,6 +287,21 @@ def detail(listing_id: str):
 _SCHEDULER_LOG_PATH = _REPO / "logs" / "scheduler.log"
 
 
+@app.after_request
+def _no_cache_for_live_endpoints(resp):
+    """Stop browsers (and proxies) from caching live API responses.
+
+    Without this, navigating away and back to /dashboard can show stale
+    JSON because the URL is identical and the browser serves the
+    cached body. Affects only /api/* responses — static files keep
+    their default caching.
+    """
+    if request.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
 @app.route("/dashboard")
 def dashboard_page():
     """Render the observability dashboard. The page shells out to the
@@ -589,10 +604,7 @@ def api_dashboard_appraisal_feed():
                    FROM listings l
                    LEFT JOIN user_searches us ON us.id = l.search_id
                    WHERE {where_sql}
-                   ORDER BY GREATEST(
-                       l.scraped_at,
-                       COALESCE(l.appraised_at, l.scraped_at)
-                   ) DESC, l.id DESC
+                   ORDER BY l.scraped_at DESC, l.id DESC
                    LIMIT %s""",
                 (*params, limit),
             )
