@@ -17,171 +17,48 @@
                 <span class="subtitle">statistical marketplace appraisal</span>
             </div>
             <nav class="header-nav">
-                <a href="#bulk">Save watches</a>
-                <a href="#subscribe">Subscribe</a>
-                <a href="#search-form">Test search</a>
+                <button class="header-pill" type="button" data-toggle-panel="left">
+                    <span class="pill-dot"></span>
+                    Test the appraiser
+                </button>
+                <button class="header-pill" type="button" data-toggle-panel="right">
+                    <span class="pill-dot"></span>
+                    Saved searches
+                </button>
             </nav>
         </div>
     </header>
 
-    <section class="hero" id="top">
-        <div class="container">
-            <div class="section-eyebrow">tell us what you want · we'll watch · we'll email</div>
-            <h1>The Marketplace deals you want, <em>delivered</em>.</h1>
-            <p class="hero-sub">
-                Save what you're looking for — exact item, distance you'd drive,
-                price range, score threshold. We poll Marketplace every minute,
-                score every new listing against real market data, and email you
-                the moment one beats your bar. Typically within 1–2 minutes of
-                the listing being posted.
-            </p>
-        </div>
-    </section>
-
-    <section class="subscribe-section reveal" id="bulk">
-        <div class="container">
-            <div class="section-head">
-                <div>
-                    <div class="section-eyebrow">step one · save your searches</div>
-                    <h2>Paste a list — get one watch per term.</h2>
-                </div>
+    <!-- LEFT PANEL: test the appraiser live -->
+    <aside class="side-panel side-panel-left" id="panel-left" hidden>
+        <div class="side-panel-inner">
+            <div class="side-panel-head">
+                <div class="section-eyebrow">try it · live</div>
+                <h2>Test the appraiser.</h2>
+                <button class="side-close" type="button" data-toggle-panel="left" aria-label="Close">×</button>
             </div>
-
-            <p class="hero-sub" style="margin-bottom: 28px; max-width: 720px;">
-                Have an LLM produce a list of items you want, paste it here,
-                hit save. We create one watch per line and apply the same
-                location + radius + price filters to all of them.
-            </p>
-
-            <form id="bulk-form" class="subscribe-form">
-                <div class="field field-full">
-                    <label for="bulk-keywords">Keywords (one per line, or comma-separated)</label>
-                    <textarea id="bulk-keywords" name="keywords" rows="6"
-                              placeholder="raspberry pi 5
-arduino uno r4
-esp32 dev board
-soldering iron
-multimeter Fluke 87"
-                              required
-                              style="background:#fff;border:1px solid var(--border-strong);border-radius:var(--radius-sm);color:var(--fg);padding:14px 16px;font:inherit;font-size:15px;font-family:'JetBrains Mono', ui-monospace, monospace;line-height:1.6;resize:vertical;"></textarea>
-                </div>
-                <div class="field">
-                    <label for="bulk-radius">Radius (km)</label>
-                    <input type="number" id="bulk-radius" name="radius_km"
-                           value="40" min="1" max="500">
-                </div>
-                <div class="field">
-                    <label for="bulk-price-min">Min price (optional)</label>
-                    <input type="number" id="bulk-price-min" name="price_min"
-                           min="0" placeholder="—">
-                </div>
-                <div class="field">
-                    <label for="bulk-price-max">Max price (optional)</label>
-                    <input type="number" id="bulk-price-max" name="price_max"
-                           min="0" placeholder="—">
-                </div>
-                <div class="field field-full">
-                    <button type="submit" class="btn">Save all watches</button>
-                </div>
-            </form>
-
-            <div id="bulk-banner" class="subscribe-banner" hidden></div>
-        </div>
-    </section>
-
-    <section class="subscribe-section reveal" id="subscribe">
-        <div class="container">
-            <div class="section-head">
-                <div>
-                    <div class="section-eyebrow">step two · subscribe to alerts</div>
-                    <h2>Get one digest email when deals appear.</h2>
-                </div>
-            </div>
-
-            <p class="hero-sub" style="margin-bottom: 28px; max-width: 720px;">
-                Subscribe an email to one of your watches. When a listing scores
-                above your threshold, we email you. If multiple deals across
-                your watches land in the same window, you get one digest
-                — not a flood of single-listing emails.
-            </p>
-
-            <form id="subscribe-form" class="subscribe-form">
-                <div class="field">
-                    <label for="sub-name">Name (optional)</label>
-                    <input type="text" id="sub-name" name="name" placeholder="Reuben">
-                </div>
-                <div class="field">
-                    <label for="sub-email">Email</label>
-                    <input type="email" id="sub-email" name="email" required
-                           placeholder="you@example.com">
-                </div>
-                <div class="field">
-                    <label for="sub-search">Saved search</label>
-                    <select id="sub-search" name="search_id" required>
-                        <option value="">— loading —</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label for="sub-threshold">Score threshold</label>
-                    <input type="number" id="sub-threshold" name="score_threshold"
-                           value="70" min="0" max="100">
-                </div>
-                <div class="field field-full">
-                    <button type="submit" class="btn btn-accent">Notify me</button>
-                </div>
-            </form>
-
-            <div id="subscribe-banner" class="subscribe-banner" hidden></div>
-        </div>
-    </section>
-
-    <div class="marquee-strip">
-        <div class="marquee-track">
-            <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
-            <span class="marquee-item">real comp data<span class="sep">·</span></span>
-            <span class="marquee-item">percentile ranks<span class="sep">·</span></span>
-            <span class="marquee-item">condition-aware<span class="sep">·</span></span>
-            <span class="marquee-item">~2 minute latency<span class="sep">·</span></span>
-            <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
-            <span class="marquee-item">real comp data<span class="sep">·</span></span>
-            <span class="marquee-item">percentile ranks<span class="sep">·</span></span>
-            <span class="marquee-item">condition-aware<span class="sep">·</span></span>
-            <span class="marquee-item">~2 minute latency<span class="sep">·</span></span>
-        </div>
-    </div>
-
-    <main class="container">
-        <section class="section search-panel reveal" id="search-form">
-            <div class="section-head">
-                <div>
-                    <div class="section-eyebrow">step two · test your search</div>
-                    <h2>Try it live before you commit.</h2>
-                </div>
-            </div>
-
-            <p class="hero-sub" style="margin-bottom: 28px; max-width: 720px;">
-                Run any keyword to see what kind of listings come back and how they'd score.
-                Useful for tuning your saved searches before subscribing.
+            <p class="side-panel-sub">
+                Run any keyword to see what listings come back and how they score.
+                Useful for tuning a saved search before you commit.
             </p>
 
             <form action="/search" method="post" class="search-form">
-                <div class="field field-wide">
+                <div class="field">
                     <label for="keyword">Keyword</label>
                     <input type="text" id="keyword" name="keyword"
                            value="{{ defaults.keyword }}"
-                           placeholder="electric scooter, iphone 14, snowboard…"
-                           autofocus required>
+                           placeholder="iphone 14, electric scooter, table saw…"
+                           required>
                 </div>
-
                 <details class="advanced">
                     <summary>Location &amp; price filters</summary>
                     <div class="filter-grid">
                         <div class="field">
-                            <label for="lat">Latitude</label>
+                            <label for="lat">Lat</label>
                             <input type="text" id="lat" name="lat" value="{{ defaults.lat }}">
                         </div>
                         <div class="field">
-                            <label for="lng">Longitude</label>
+                            <label for="lng">Lng</label>
                             <input type="text" id="lng" name="lng" value="{{ defaults.lng }}">
                         </div>
                         <div class="field">
@@ -190,26 +67,184 @@ multimeter Fluke 87"
                                    value="{{ defaults.radius_km }}" min="1" max="500">
                         </div>
                         <div class="field">
-                            <label for="price_min">Min price</label>
+                            <label for="price_min">Min $</label>
                             <input type="number" id="price_min" name="price_min"
                                    value="{{ defaults.price_min }}" min="0">
                         </div>
                         <div class="field">
-                            <label for="price_max">Max price</label>
+                            <label for="price_max">Max $</label>
                             <input type="number" id="price_max" name="price_max"
                                    value="{{ defaults.price_max }}" min="0">
                         </div>
                     </div>
                 </details>
-
-                <button type="submit" class="btn btn-accent">Search</button>
+                <button type="submit" class="btn btn-accent">Run search</button>
             </form>
 
             {% if error %}
                 <div class="error-banner">{{ error }}</div>
             {% endif %}
-        </section>
+        </div>
+    </aside>
 
+    <!-- RIGHT PANEL: saved searches (single + bulk + subscribe + price filter) -->
+    <aside class="side-panel side-panel-right" id="panel-right" hidden>
+        <div class="side-panel-inner">
+            <div class="side-panel-head">
+                <div class="section-eyebrow">save · subscribe · get notified</div>
+                <h2>Saved searches.</h2>
+                <button class="side-close" type="button" data-toggle-panel="right" aria-label="Close">×</button>
+            </div>
+            <p class="side-panel-sub">
+                Tell us what you want. We email you the moment it appears at a great price.
+            </p>
+
+            <!-- Tabs: single | bulk -->
+            <div class="tab-bar" role="tablist">
+                <button class="tab-btn is-active" data-tab="single" role="tab">Single</button>
+                <button class="tab-btn" data-tab="bulk" role="tab">List of items</button>
+            </div>
+
+            <!-- SINGLE -->
+            <div class="tab-pane is-active" data-pane="single">
+                <form id="single-form" class="search-form">
+                    <div class="field">
+                        <label for="single-keyword">Keyword</label>
+                        <input type="text" id="single-keyword" name="keyword"
+                               placeholder="2018 Honda Civic, MacBook Pro 14 M2, etc." required>
+                    </div>
+                    <div class="filter-grid">
+                        <div class="field">
+                            <label for="single-radius">Radius (km)</label>
+                            <input type="number" id="single-radius" name="radius_km"
+                                   value="40" min="1" max="500">
+                        </div>
+                        <div class="field">
+                            <label for="single-price-min">Min $</label>
+                            <input type="number" id="single-price-min" name="price_min"
+                                   min="0" placeholder="—">
+                        </div>
+                        <div class="field">
+                            <label for="single-price-max">Max $</label>
+                            <input type="number" id="single-price-max" name="price_max"
+                                   min="0" placeholder="—">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn">Save this watch</button>
+                </form>
+                <div id="single-banner" class="subscribe-banner" hidden></div>
+            </div>
+
+            <!-- BULK -->
+            <div class="tab-pane" data-pane="bulk">
+                <form id="bulk-form" class="search-form">
+                    <div class="field">
+                        <label for="bulk-keywords">Keywords (one per line, or comma-separated)</label>
+                        <textarea id="bulk-keywords" name="keywords" rows="6"
+                                  placeholder="raspberry pi 5
+arduino uno r4
+esp32 dev board
+soldering iron
+multimeter"
+                                  required class="text-area"></textarea>
+                    </div>
+                    <div class="filter-grid">
+                        <div class="field">
+                            <label for="bulk-radius">Radius (km)</label>
+                            <input type="number" id="bulk-radius" name="radius_km"
+                                   value="40" min="1" max="500">
+                        </div>
+                        <div class="field">
+                            <label for="bulk-price-min">Min $</label>
+                            <input type="number" id="bulk-price-min" name="price_min"
+                                   min="0" placeholder="—">
+                        </div>
+                        <div class="field">
+                            <label for="bulk-price-max">Max $</label>
+                            <input type="number" id="bulk-price-max" name="price_max"
+                                   min="0" placeholder="—">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn">Save all watches</button>
+                </form>
+                <div id="bulk-banner" class="subscribe-banner" hidden></div>
+            </div>
+
+            <!-- SUBSCRIBE — applies to all watches -->
+            <div class="subscribe-block">
+                <div class="section-eyebrow">step two · email alerts</div>
+                <h3 class="subscribe-h3">Get a digest when deals appear.</h3>
+                <p class="subscribe-text">
+                    We email you within ~1 minute of any saved search getting a deal above your
+                    score threshold. Multiple deals at once = one digest, not a flood.
+                </p>
+                <form id="subscribe-form" class="search-form">
+                    <div class="field">
+                        <label for="sub-name">Name</label>
+                        <input type="text" id="sub-name" name="name" placeholder="optional">
+                    </div>
+                    <div class="field">
+                        <label for="sub-email">Email</label>
+                        <input type="email" id="sub-email" name="email" required
+                               placeholder="you@example.com">
+                    </div>
+                    <div class="filter-grid">
+                        <div class="field">
+                            <label for="sub-search">Saved watch</label>
+                            <select id="sub-search" name="search_id" required>
+                                <option value="">— loading —</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="sub-threshold">Score threshold</label>
+                            <input type="number" id="sub-threshold" name="score_threshold"
+                                   value="70" min="0" max="100">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-accent">Notify me</button>
+                </form>
+                <div id="subscribe-banner" class="subscribe-banner" hidden></div>
+            </div>
+        </div>
+    </aside>
+
+    <section class="hero" id="top">
+        <div class="container">
+            <div class="section-eyebrow">tell us what you want · we'll watch · we'll email</div>
+            <h1>The Marketplace deals you want, <em>delivered</em>.</h1>
+            <p class="hero-sub">
+                Save a list of what you're looking for — exact items, distance you'd drive,
+                price range, score threshold. We poll Marketplace every minute, score every
+                new listing against real market data, and email you the moment one beats
+                your bar.
+            </p>
+            <div class="hero-actions">
+                <button class="btn btn-accent" type="button" data-toggle-panel="right">
+                    Save your searches →
+                </button>
+                <button class="btn btn-ghost" type="button" data-toggle-panel="left">
+                    Or test the appraiser
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <div class="marquee-strip">
+        <div class="marquee-track">
+            <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
+            <span class="marquee-item">real comp data<span class="sep">·</span></span>
+            <span class="marquee-item">condition-aware<span class="sep">·</span></span>
+            <span class="marquee-item">~1 minute latency<span class="sep">·</span></span>
+            <span class="marquee-item">batched digest emails<span class="sep">·</span></span>
+            <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
+            <span class="marquee-item">real comp data<span class="sep">·</span></span>
+            <span class="marquee-item">condition-aware<span class="sep">·</span></span>
+            <span class="marquee-item">~1 minute latency<span class="sep">·</span></span>
+            <span class="marquee-item">batched digest emails<span class="sep">·</span></span>
+        </div>
+    </div>
+
+    <main class="container">
         {% if meta %}
             <section class="meta-bar reveal">
                 <span><strong>{{ meta.count }}</strong> listings for "<em>{{ meta.keyword }}</em>"</span>
@@ -290,7 +325,7 @@ multimeter Fluke 87"
                                             <div class="unscoreable-reason">{{ bd.unscoreable_reason }}</div>
                                             {% if bd.median %}
                                                 <div class="unscoreable-stats muted">
-                                                    {{ bd.sample_size }} comp(s) found · median ${{ '%.0f'|format(bd.median) }}{% if bd.iqr %} · IQR ${{ '%.0f'|format(bd.iqr) }}{% endif %}
+                                                    {{ bd.sample_size }} comp(s) · median ${{ '%.0f'|format(bd.median) }}{% if bd.iqr %} · IQR ${{ '%.0f'|format(bd.iqr) }}{% endif %}
                                                 </div>
                                             {% endif %}
                                             {% if r.comp_search_term %}
@@ -322,9 +357,18 @@ multimeter Fluke 87"
                                                     <span class="score-fair">fair: ${{ '%.0f'|format(r.fair_value) }}</span>
                                                 {% endif %}
                                             </div>
+                                            {% if bd and bd.condition_flags %}
+                                                <div class="cond-flags">
+                                                    {% for f in bd.condition_flags %}
+                                                        <span class="cond-chip
+                                                            {% if f in ('excellent_condition','has_warranty','low_use','recently_serviced') %}cond-pos{% else %}cond-neg{% endif %}">
+                                                            {{ f.replace('_', ' ') }}
+                                                        </span>
+                                                    {% endfor %}
+                                                </div>
+                                            {% endif %}
                                             {% if bd and bd.data_quality_poor %}
-                                                <div class="data-warning"
-                                                     title="IQR ${{ '%.0f'|format(bd.iqr or 0) }} exceeds trimmed median ${{ '%.0f'|format(bd.trimmed_median or 0) }}; data is too dispersed for a single number.">
+                                                <div class="data-warning">
                                                     ⚠ comps too varied — score unreliable
                                                 </div>
                                             {% endif %}
@@ -340,7 +384,7 @@ multimeter Fluke 87"
                                             {% endif %}
                                             {% if bd and bd.confidence_label %}
                                                 <div class="confidence-bar conf-{{ bd.confidence_label }}"
-                                                     title="confidence interval ±{{ bd.confidence_pm }}; based on n={{ bd.sample_size }} comp(s)">
+                                                     title="confidence interval ±{{ bd.confidence_pm }}; n={{ bd.sample_size }}">
                                                     <div class="conf-dots">
                                                         <span class="conf-dot {% if bd.confidence_label in ('high','medium','low') %}lit{% endif %}"></span>
                                                         <span class="conf-dot {% if bd.confidence_label in ('high','medium') %}lit{% endif %}"></span>
@@ -365,8 +409,7 @@ multimeter Fluke 87"
                                                 <button class="comps-toggle muted"
                                                         type="button"
                                                         data-comp-term="{{ r.comp_search_term or '' }}"
-                                                        data-comp-source="{{ r.comp_source or 'marketplace' }}"
-                                                        title="See the listings this median is based on">
+                                                        data-comp-source="{{ r.comp_source or 'marketplace' }}">
                                                     {{ r.comp_sample_size }} comp(s){% if bd and bd.outliers_dropped %}, {{ bd.outliers_dropped }} outlier(s) dropped{% endif %}{% if r.comp_median %} · raw median ${{ '%.0f'|format(r.comp_median) }}{% endif %} ▾
                                                 </button>
                                                 <div class="comps-pane" hidden>
@@ -390,7 +433,7 @@ multimeter Fluke 87"
                                         <div class="detail-pipeline"></div>
                                     </div>
                                     <div class="appraise-pane" hidden>
-                                        <div class="appraise-spinner" hidden>scoring (~3-5s, longer for niche items)…</div>
+                                        <div class="appraise-spinner" hidden>scoring (~3-5s)…</div>
                                         <div class="appraise-result"></div>
                                     </div>
                                 </div>
@@ -409,6 +452,8 @@ multimeter Fluke 87"
             <a href="https://github.com/reubenlavin08/bullseye" target="_blank" rel="noopener">GitHub</a>
         </div>
     </footer>
+
+    <div class="panel-overlay" id="panel-overlay" hidden></div>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

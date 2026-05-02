@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_S = int(os.environ.get("POLL_INTERVAL_S", "60"))
 SAFETY_NET_INTERVAL_S = int(os.environ.get("SAFETY_NET_INTERVAL_S", "600"))
 RELOAD_INTERVAL_S = int(os.environ.get("RELOAD_INTERVAL_S", "300"))
-DIGEST_INTERVAL_S = int(os.environ.get("DIGEST_INTERVAL_S", "180"))
+DIGEST_INTERVAL_S = int(os.environ.get("DIGEST_INTERVAL_S", "60"))
 WARMUP_LLM_ON_BOOT = os.environ.get("WARMUP_LLM_ON_BOOT", "1") not in ("0", "")
 
 

@@ -481,9 +481,142 @@
         });
     }
 
+    // --- Side panels (left = test, right = saved searches) -------------
+
+    function setupSidePanels() {
+        const overlay = document.getElementById("panel-overlay");
+        const panels = {
+            left: document.getElementById("panel-left"),
+            right: document.getElementById("panel-right"),
+        };
+
+        function open(side) {
+            const panel = panels[side];
+            if (!panel) return;
+            // close the OTHER side first (only one open at a time on mobile)
+            const other = side === "left" ? "right" : "left";
+            close(other, false);
+            panel.hidden = false;
+            // double rAF so the transition fires from the off-screen state
+            requestAnimationFrame(() =>
+                requestAnimationFrame(() => panel.classList.add("is-open"))
+            );
+            overlay.hidden = false;
+            requestAnimationFrame(() => overlay.classList.add("is-visible"));
+            document.body.style.overflow = "hidden";
+        }
+
+        function close(side, hideOverlay = true) {
+            const panel = panels[side];
+            if (!panel) return;
+            panel.classList.remove("is-open");
+            // hide after the transition so it doesn't disappear instantly
+            setTimeout(() => {
+                if (!panel.classList.contains("is-open")) panel.hidden = true;
+            }, 380);
+            if (hideOverlay) {
+                overlay.classList.remove("is-visible");
+                setTimeout(() => {
+                    if (!overlay.classList.contains("is-visible")) {
+                        overlay.hidden = true;
+                        document.body.style.overflow = "";
+                    }
+                }, 280);
+            }
+        }
+
+        document.querySelectorAll("[data-toggle-panel]").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                const side = e.currentTarget.dataset.togglePanel;
+                const panel = panels[side];
+                if (panel.classList.contains("is-open")) {
+                    close(side);
+                } else {
+                    open(side);
+                }
+            });
+        });
+
+        overlay.addEventListener("click", () => {
+            close("left");
+            close("right");
+        });
+
+        // Esc closes either
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                close("left");
+                close("right");
+            }
+        });
+    }
+
+    // --- Tab bar inside the saved-searches panel ----------------------
+
+    function setupTabs() {
+        const tabBar = document.querySelector(".tab-bar");
+        if (!tabBar) return;
+        tabBar.querySelectorAll(".tab-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const tab = btn.dataset.tab;
+                tabBar.querySelectorAll(".tab-btn").forEach((b) =>
+                    b.classList.toggle("is-active", b === btn)
+                );
+                document.querySelectorAll(".tab-pane").forEach((p) => {
+                    p.classList.toggle("is-active", p.dataset.pane === tab);
+                });
+            });
+        });
+    }
+
+    // --- Single-search form (in right panel) --------------------------
+
+    function setupSingleForm() {
+        const form = document.getElementById("single-form");
+        if (!form) return;
+        const banner = document.getElementById("single-banner");
+
+        form.addEventListener("submit", async (ev) => {
+            ev.preventDefault();
+            banner.hidden = true;
+            banner.classList.remove("is-error");
+            // Reuse the bulk endpoint with a single keyword — saves wiring
+            // up a separate route. Same dedup logic applies.
+            const fd = new FormData(form);
+            try {
+                const res = await fetch("/api/searches/bulk", {
+                    method: "POST",
+                    body: fd,
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    let lines = [data.summary || "Saved."];
+                    if (data.duplicate && data.duplicate.length) {
+                        lines.push("(this watch already existed — re-activated)");
+                    }
+                    banner.textContent = lines.join(" · ");
+                    banner.hidden = false;
+                    form.reset();
+                    setupSubscribeForm();
+                } else {
+                    banner.textContent = "Couldn't save: " + (data.error || "unknown");
+                    banner.classList.add("is-error");
+                    banner.hidden = false;
+                }
+            } catch (err) {
+                banner.textContent = "Network error: " + err.message;
+                banner.classList.add("is-error");
+                banner.hidden = false;
+            }
+        });
+    }
+
     function bootAll() {
         init();
         setupReveal();
+        setupSidePanels();
+        setupTabs();
+        setupSingleForm();
         setupBulkForm();
         setupSubscribeForm();
     }

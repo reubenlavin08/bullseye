@@ -903,6 +903,274 @@ h1, h2, h3 {
 .site-footer a { color: rgba(250, 246, 241, 0.7); }
 .site-footer a:hover { color: var(--accent); }
 
+/* ---------- Side panels (left = test, right = saved searches) ---------- */
+
+.panel-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(26, 22, 20, 0.45);
+    z-index: 80;
+    opacity: 0;
+    transition: opacity 280ms var(--ease);
+    pointer-events: none;
+}
+
+.panel-overlay.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.side-panel {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 460px;
+    max-width: 92vw;
+    background: var(--bg);
+    z-index: 100;
+    box-shadow: 0 0 60px rgba(26, 22, 20, 0.18);
+    transition: transform 360ms var(--ease);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.side-panel-left  { left: 0;  transform: translateX(-100%); }
+.side-panel-right { right: 0; transform: translateX(100%);  }
+
+.side-panel.is-open {
+    transform: translateX(0);
+}
+
+.side-panel-inner {
+    padding: 28px 28px 36px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.side-panel-head {
+    position: relative;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 6px;
+}
+
+.side-panel-head h2 {
+    font-size: 28px;
+    margin: 4px 0 0;
+}
+
+.side-panel-sub {
+    color: var(--fg-muted);
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0 0 4px;
+}
+
+.side-close {
+    position: absolute;
+    top: -4px;
+    right: 0;
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    width: 32px;
+    height: 32px;
+    color: var(--fg-muted);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 200ms var(--ease);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.side-close:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+/* Pill-shaped header buttons that toggle panels */
+
+.header-pill {
+    background: transparent;
+    border: 1px solid rgba(250, 246, 241, 0.3);
+    border-radius: 999px;
+    color: rgba(250, 246, 241, 0.85);
+    padding: 7px 14px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 200ms var(--ease);
+    letter-spacing: 0.01em;
+}
+
+.header-pill:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(199, 90, 60, 0.08);
+}
+
+.pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.6; transform: scale(1); }
+    50%      { opacity: 1.0; transform: scale(1.25); }
+}
+
+/* Hero CTA buttons */
+
+.hero-actions {
+    margin-top: 30px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border-strong);
+}
+
+.btn-ghost:hover {
+    background: var(--bg-elev);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* Tab bar inside the saved-searches panel */
+
+.tab-bar {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px;
+}
+
+.tab-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition: all 200ms var(--ease);
+    letter-spacing: 0.02em;
+}
+
+.tab-btn.is-active {
+    background: var(--bg-dark);
+    color: #faf6f1;
+}
+
+.tab-pane { display: none; }
+.tab-pane.is-active { display: flex; flex-direction: column; gap: 14px; }
+
+/* Subscribe block inside the right panel */
+
+.subscribe-block {
+    margin-top: 8px;
+    padding-top: 22px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.subscribe-h3 {
+    font-family: 'Fraunces', serif;
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 0;
+}
+
+.subscribe-text {
+    color: var(--fg-muted);
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0;
+}
+
+.text-area {
+    background: #fff;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    padding: 14px 16px;
+    font: inherit;
+    font-size: 14px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    line-height: 1.6;
+    resize: vertical;
+}
+
+.text-area:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Condition chips on listing cards */
+
+.cond-flags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+
+.cond-chip {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid;
+}
+
+.cond-neg {
+    color: var(--bad);
+    background: rgba(184, 71, 59, 0.08);
+    border-color: rgba(184, 71, 59, 0.3);
+}
+
+.cond-pos {
+    color: var(--good);
+    background: rgba(93, 122, 79, 0.08);
+    border-color: rgba(93, 122, 79, 0.3);
+}
+
+/* Hide the old Step One / Step Two sections that lived inline; the
+   panels replace them. Keep meta-bar, marquee, listings. */
+
+.subscribe-section,
+#search-form.section {
+    display: none !important;
+}
+
 /* ---------- Reveal-on-scroll for arbitrary blocks ---------- */
 
 .reveal {

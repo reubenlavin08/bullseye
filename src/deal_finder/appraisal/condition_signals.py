@@ -5,29 +5,27 @@ to similar ones." It does NOT know that a 2010 Civic with 'needs new
 brakes' or 'frame damage' is worth less than the same year/model in
 clean condition. This module fills that gap.
 
-Approach:
-  1. Use the small LLM (llama3.2:3B) to extract a fixed, finite set of
-     binary condition flags from the listing description.
-  2. Each flag has a known, fixed adjustment factor (e.g. needs_repair
-     = −15 score points).
-  3. Sum of factors is the score adjustment, applied linearly to the
-     percentile-derived score.
+Hybrid extractor — both signals fire if EITHER source detects them:
 
-Why this approach:
-  * Stays deterministic — same flags + same factors = same adjustment.
-  * Defensible — every adjustment is visible in the breakdown.
-  * Cheap — one LLM call per scoreable listing.
-  * The LLM's only job is binary extraction (something it does well);
-    it is NOT picking the score directly.
+  REGEX BANK   (deterministic, fast, free) catches explicit phrasing
+               like "small dent", "loud noise when braking", "scratches",
+               "won't start", "blown speaker", etc. Hundreds of patterns
+               organized by flag.
 
-Adjustment factors are calibrated by intuition for now. Once we have
-real sale-price data (eBay sold comps), we can recalibrate from
-ground truth.
+  SMALL LLM    (llama3.2:3B, JSON output) catches novel phrasings the
+               regex misses ("starts on cold mornings sometimes",
+               "took it in for the rumble").
+
+Each flag still has a fixed adjustment factor; final score adjustment
+is the SUM of fired flags (clamped to [-35, +10]). Math stays
+deterministic — the LLM only does binary extraction, never picks the
+score.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import asdict, dataclass, field
 
 from .ollama_client import OllamaClient, get_default_client
@@ -64,6 +62,140 @@ SCORE_ADJUSTMENTS: dict[str, int] = {
 # below 0 by stacking flags. Score is also clamped to [0, 100] later.
 MAX_NEGATIVE_ADJ = -35
 MAX_POSITIVE_ADJ = +10
+
+
+# --- Regex pattern bank --------------------------------------------------
+#
+# Each flag maps to a list of compiled regex patterns. A flag fires if
+# ANY pattern matches the description (case-insensitive). These are
+# tuned to catch common Marketplace phrasing across vehicles,
+# electronics, appliances, and furniture.
+#
+# Add cautiously: false positives drag down legitimate listings. When
+# in doubt, prefer letting the LLM catch it.
+
+_RAW_PATTERNS: dict[str, list[str]] = {
+    "needs_repair": [
+        # Direct mentions
+        r"\bneeds?\s+(?:new\s+)?(?:repair|fix|fixing|servic|work|tune)",
+        r"\b(?:needs?|requires?)\s+(?:a\s+)?(?:new|replacement)\s+\w+",
+        r"\b(?:as[- ]is|sold\s+as[- ]is)\b",
+        r"\bnot\s+(?:working|functional|running|charging)\b",
+        r"\bdoesn'?t\s+(?:work|run|start|charge|hold)\b",
+        r"\bwon'?t\s+(?:start|charge|turn|run|boot)\b",
+        # Audible / mechanical issues
+        r"\b(?:loud|strange|odd|weird|grinding|knocking|clunk\w*|rattl\w*|whirr\w*)\s+(?:noise|sound)",
+        r"\bnoise\s+when\s+(?:braking|driving|turning|accelerating)",
+        r"\b(?:engine|transmission|brake|clutch|alternator|starter|battery)\s+(?:issue|problem|trouble)",
+        r"\bcheck\s+engine\s+(?:light|on)\b",
+        r"\bleak\w*\b.*\b(?:oil|coolant|fluid|gas|radiator|transmission)",
+        r"\b(?:oil|coolant|fluid|gas|radiator|transmission)\s+leak\w*",
+        r"\b(?:slipping|slips|slipped)\s+(?:transmission|gear|clutch)",
+        # Battery / charging
+        r"\b(?:battery|charging\s+port|usb-?c\s+port)\s+(?:issue|problem|won'?t\s+hold)",
+        r"\bdoesn'?t\s+hold\s+(?:a\s+)?charge\b",
+        # Generic wear
+        r"\bbroken\s+\w+",
+        r"\b\w+\s+(?:is|are)\s+broken\b",
+        # Electronics issues
+        r"\b(?:cracked|shattered)\s+(?:screen|display|lcd)",
+        r"\b(?:dead|stuck)\s+(?:pixel|key)",
+        r"\b(?:burn[- ]?in|ghosting)\b",
+        r"\bbattery\s+(?:swollen|bulg\w+|degraded)",
+    ],
+    "accident_history": [
+        r"\b(?:minor|prior|previous|been\s+in)\s+(?:an?\s+)?accident",
+        r"\baccident\s+(?:history|damage|on\s+report)",
+        r"\b(?:was|been)\s+in\s+a?\s*(?:fender[- ]bender|crash|collision|wreck)",
+        r"\b(?:rear|front|side)[- ]ended",
+        r"\b(?:body|frame|chassis)\s+(?:damage|repair)",
+        r"\bcollision\s+(?:repair|damage)",
+    ],
+    "salvage_title": [
+        r"\bsalvage(?:\s+title)?\b",
+        r"\brebuilt(?:\s+title)?\b",
+        r"\b(?:branded|reconstructed|flood|lemon)\s+title\b",
+        r"\bfire\s+damaged\b",
+    ],
+    "high_mileage": [
+        # Cars: 150k+ miles or km
+        r"\b(?:1[5-9]\d|[2-9]\d\d|\d{3,})\s*,?\s*\d{3}\s*(?:miles|mi|km|kms)\b",
+        r"\b(?:150|175|200|225|250|300|350|400)\s*k\s*(?:miles|km)?\b",
+        r"\bhigh\s+(?:mileage|miles|km)\b",
+        r"\bdaily\s+driver\b",
+    ],
+    "cosmetic_damage": [
+        r"\b(?:small|minor|few|some|tiny)\s+(?:dents?|scratches?|scrapes?|dings?|chips?|nicks?)",
+        r"\b(?:dents?|scratches?|scrapes?|dings?|chips?|nicks?)\s+(?:here\s+and\s+there|on\s+\w+)",
+        r"\bcosmetic\s+(?:damage|wear|issues?)",
+        r"\bpaint\s+(?:scratch\w*|chip\w*|fad\w*|peel\w*|damage)",
+        r"\b(?:fad\w+|peel\w+|cracked|chipped)\s+\w+",
+        r"\b(?:rust|rusty|rusted|corrosion)\b",
+        r"\b(?:bumper|fender|door|hood|trunk|panel)\s+(?:dent|scratch|scrape|damage)",
+        r"\b(?:scuff|scuffs|scuffed)\b",
+        r"\bsurface\s+(?:rust|corrosion)",
+    ],
+    "missing_parts": [
+        r"\bmissing\s+\w+",
+        r"\b(?:no|without)\s+(?:charger|cable|remote|stand|cord|battery|key|manual|box)",
+        r"\b(?:incomplete|partial)\s+(?:set|unit)",
+        r"\bfor\s+parts\s+only",
+        r"\bdoes\s+not\s+come\s+with",
+    ],
+    # ---- Positive signals ----
+    "excellent_condition": [
+        r"\bmint\s+condition\b",
+        r"\b(?:like|as)\s+new\b",
+        r"\bbarely\s+(?:used|driven|ridden|worn|touched)\b",
+        r"\bshowroom\s+(?:condition|new)\b",
+        r"\bperfect\s+condition\b",
+        r"\bpristine\b",
+        r"\bnever\s+used\b",
+        r"\bbrand\s+new\b",
+    ],
+    "has_warranty": [
+        r"\b(?:active|valid|remaining|transferable)\s+warranty",
+        r"\bunder\s+warranty\b",
+        r"\bextended\s+warranty\s+(?:included|valid|active)",
+        r"\bwarranty\s+(?:until|valid\s+until|good\s+until|active)",
+    ],
+    "low_use": [
+        r"\b(?:garage|barn)\s+kept\b",
+        r"\blow\s+(?:miles|mileage|hours)\b",
+        r"\b(?:rarely|seldom|hardly)\s+(?:used|driven|ridden|run)",
+        r"\b(?:single|one)\s+owner\b",
+        r"\boriginal\s+(?:owner|miles)",
+    ],
+    "recently_serviced": [
+        r"\bnew(?:ly)?\s+(?:tire|battery|brake|clutch|oil|filter|spark plug)",
+        r"\brecent(?:ly)?\s+(?:service|tune[- ]up|oil change|inspect)",
+        r"\bjust\s+(?:serviced|tuned|inspected|detailed|cleaned)",
+        r"\bfresh\s+(?:oil|tune|inspect|detail|paint)",
+        r"\bdetailed\s+(?:last\s+week|recently)",
+    ],
+}
+
+
+# Compile once at import time.
+_PATTERNS: dict[str, list[re.Pattern]] = {
+    flag: [re.compile(p, re.IGNORECASE) for p in patterns]
+    for flag, patterns in _RAW_PATTERNS.items()
+}
+
+
+def _regex_extract(description: str) -> dict[str, list[str]]:
+    """Return {flag_name: [matched_pattern_strings]} for everything that
+    fires. Empty dict if nothing matched."""
+    out: dict[str, list[str]] = {}
+    for flag, patterns in _PATTERNS.items():
+        hits = []
+        for pat in patterns:
+            m = pat.search(description)
+            if m:
+                hits.append(m.group(0))
+        if hits:
+            out[flag] = hits
+    return out
 
 
 @dataclass
@@ -145,41 +277,51 @@ def extract_condition_signals(
     *,
     client: OllamaClient | None = None,
     model: str = DEFAULT_MODEL,
+    use_llm: bool = True,
 ) -> ConditionSignals:
     """Extract condition flags from a description.
 
+    Hybrid: regex bank fires first (deterministic, free). LLM runs
+    second to catch novel phrasings the regex missed. Final flag set
+    is the UNION — a flag fires if EITHER source detects it.
+
     Returns ConditionSignals with score_adjustment computed. On LLM
-    failure or empty description, returns the default (no flags fired,
-    score_adjustment=0) — caller can treat that as "no condition info,
-    no adjustment."
+    failure or empty description, returns whatever regex caught (or
+    a default if regex caught nothing).
     """
     if not description or not description.strip():
         return ConditionSignals()
 
-    cli = client or get_default_client()
-    desc = description[:2000]  # cap prompt size; flags should be near top
-    try:
-        resp = cli.generate_json(
-            model=model,
-            system=SYSTEM_PROMPT,
-            user=f"Description:\n{desc}",
-            temperature=0.0,
-            num_predict=200,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("condition extract failed: %s", e)
-        return ConditionSignals()
+    desc = description[:2000]  # cap; flags should be near the top anyway
 
-    parsed = resp.parsed
-    if not isinstance(parsed, dict):
-        logger.warning(
-            "condition extract returned bad shape: %s", resp.raw_text[:200],
-        )
-        return ConditionSignals()
+    # 1. Regex pass (always runs, fast, free)
+    regex_hits = _regex_extract(desc)
+    flags = {k: (k in regex_hits) for k in SCORE_ADJUSTMENTS}
 
-    # Build the dataclass from the JSON, defaulting any missing key to False.
-    flags = {k: bool(parsed.get(k, False)) for k in SCORE_ADJUSTMENTS}
-    note = str(parsed.get("note", "")).strip()[:200]
+    # 2. LLM pass (optional — catches what regex missed)
+    note = ""
+    llm_added: list[str] = []
+    if use_llm:
+        cli = client or get_default_client()
+        try:
+            resp = cli.generate_json(
+                model=model,
+                system=SYSTEM_PROMPT,
+                user=f"Description:\n{desc}",
+                temperature=0.0,
+                num_predict=200,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("condition LLM call failed: %s", e)
+            resp = None
+
+        if resp is not None and isinstance(resp.parsed, dict):
+            parsed = resp.parsed
+            note = str(parsed.get("note", "")).strip()[:200]
+            for flag in SCORE_ADJUSTMENTS:
+                if bool(parsed.get(flag, False)) and not flags[flag]:
+                    flags[flag] = True
+                    llm_added.append(flag)
 
     # Sum adjustments for fired flags
     fired = [k for k, v in flags.items() if v]
@@ -190,6 +332,20 @@ def extract_condition_signals(
         raw_adj = MAX_NEGATIVE_ADJ
     if raw_adj > MAX_POSITIVE_ADJ:
         raw_adj = MAX_POSITIVE_ADJ
+
+    if fired and (regex_hits or llm_added):
+        # Auto-build a note showing what fired and how it was detected
+        # if the LLM didn't supply one.
+        if not note:
+            srcs = []
+            for f in fired:
+                if f in regex_hits and f in llm_added:
+                    srcs.append(f"{f}(regex+llm)")
+                elif f in regex_hits:
+                    srcs.append(f"{f}(regex)")
+                else:
+                    srcs.append(f"{f}(llm)")
+            note = "Detected: " + ", ".join(srcs)
 
     return ConditionSignals(
         needs_repair=flags["needs_repair"],
