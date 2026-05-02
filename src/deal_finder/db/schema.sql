@@ -160,3 +160,13 @@ CREATE TABLE IF NOT EXISTS user_settings (
 -- is included in a 24h roundup so we don't re-include it tomorrow.
 -- ---------------------------------------------------------------------
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS summarized_at TIMESTAMPTZ;
+
+-- ---------------------------------------------------------------------
+-- subscribers backfill — these were added to the CREATE TABLE above
+-- after some users already had subscribers tables. ALTER ... IF NOT
+-- EXISTS makes the migration idempotent.
+-- ---------------------------------------------------------------------
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS daily_summary_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS last_summary_sent_at  TIMESTAMPTZ;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS last_digest_sent_at   TIMESTAMPTZ;
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS confirmation_sent_at  TIMESTAMPTZ;

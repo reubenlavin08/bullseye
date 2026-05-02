@@ -476,8 +476,137 @@ def _render_text(matches: list[DigestMatch]) -> str:
 
 
 _HTML_HEAD = (
-    '<!doctype html><html><body style="margin:0;background:#faf6f1;'
-    'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;'
-    'color:#1a1614;line-height:1.55;">'
+    '<!doctype html><html><body style="margin:0;background:#f3ead3;'
+    'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'
+    'color:#3f1718;line-height:1.55;">'
     '<div style="max-width:560px;margin:0 auto;padding:32px 24px;">'
 )
+
+
+def send_confirmation_email(
+    *,
+    email: str,
+    name: str | None,
+    keywords: list[str],
+    radius_km: int,
+    home_label: str | None,
+    score_threshold: int,
+    price_min: int | None = None,
+    price_max: int | None = None,
+) -> dict:
+    """Fire a one-shot 'we're watching for you' email after a save.
+
+    This is the user-facing receipt that the system actually picked up
+    their save. Without it the panel just closes silently and the user
+    has no idea whether anything happened.
+
+    Returns {ok, backend, message}. Failures don't raise — the save has
+    already committed; the email is best-effort.
+    """
+    if not email or "@" not in email:
+        return {"ok": False, "backend": "n/a", "message": "no email"}
+
+    n = len(keywords)
+    plural = "watch" if n == 1 else "watches"
+    greet = f"Hi {escape(name)}," if name else "Hi,"
+
+    location_line = f"around {escape(home_label)}" if home_label else f"within {radius_km} km of your home"
+    price_line = ""
+    if price_min and price_max:
+        price_line = f" · ${price_min:,}–${price_max:,}"
+    elif price_max:
+        price_line = f" · under ${price_max:,}"
+    elif price_min:
+        price_line = f" · ${price_min:,}+"
+
+    kw_html = "".join(
+        f'<li style="margin:0 0 4px;font-family:ui-monospace,monospace;font-size:13px;">'
+        f'<span style="color:#c2410c;">›</span> {escape(k)}</li>'
+        for k in keywords
+    )
+    kw_text = "\n".join(f"  - {k}" for k in keywords)
+
+    subject = (
+        f"bullseye: watching {n} item · alerts at score ≥ {score_threshold}"
+        if n == 1 else
+        f"bullseye: watching {n} items · alerts at score ≥ {score_threshold}"
+    )
+
+    html = (
+        _HTML_HEAD
+        + f'<div style="display:inline-block;border:1px dashed rgba(63,23,24,0.40);'
+          f'padding:4px 10px;border-radius:999px;font-size:9px;letter-spacing:0.18em;'
+          f'text-transform:uppercase;color:#6b3a3b;margin-bottom:18px;">'
+          f'order ticket · confirmed</div>'
+        + f'<h1 style="font-family:Georgia,serif;font-weight:500;font-size:30px;'
+          f'letter-spacing:-0.02em;margin:0 0 6px;color:#3f1718;">'
+          f'You\'re on watch.</h1>'
+        + f'<p style="color:#6b3a3b;font-size:13px;margin:0 0 22px;">'
+          f'{greet} we just started monitoring '
+          f'{f"<strong>{n}</strong> {plural}" if True else ""}'
+          f' for you {escape(location_line)}{escape(price_line)}.'
+          f'</p>'
+        + f'<div style="text-align:center;color:#9a7070;font-size:10px;'
+          f'letter-spacing:0.10em;margin:14px 0;">— · — · — · — · — · — · — · — · — · —</div>'
+        + f'<h2 style="font-size:11px;letter-spacing:0.18em;text-transform:uppercase;'
+          f'color:#c2410c;margin:0 0 10px;font-weight:700;">watching:</h2>'
+        + f'<ul style="margin:0 0 22px;padding:0;list-style:none;">{kw_html}</ul>'
+        + f'<div style="text-align:center;color:#9a7070;font-size:10px;'
+          f'letter-spacing:0.10em;margin:14px 0;">— · — · — · — · — · — · — · — · — · —</div>'
+        + f'<p style="color:#3f1718;font-size:13px;margin:0 0 8px;">'
+          f'<strong style="font-family:Georgia,serif;font-style:italic;">How alerts work:</strong>'
+          f'</p>'
+        + f'<ul style="color:#6b3a3b;font-size:12px;margin:0 0 22px;padding-left:18px;line-height:1.7;">'
+          f'<li>We poll Marketplace every minute on each watch.</li>'
+          f'<li>Every new listing is scored against real comp data.</li>'
+          f'<li>You\'ll get an instant email the moment something scores '
+          f'<strong style="color:#c2410c;">≥ {score_threshold}</strong>.</li>'
+          f'<li>Once a day, we send a summary of everything else we appraised.</li>'
+          f'</ul>'
+        + f'<p style="color:#9a7070;font-size:10px;letter-spacing:0.10em;'
+          f'text-transform:uppercase;border-top:1px dashed rgba(63,23,24,0.18);'
+          f'padding-top:14px;margin-top:24px;">'
+          f'bullseye · est. 2026 · deterministic appraisal'
+          f'</p>'
+        + '</div></body></html>'
+    )
+
+    text = (
+        f"bullseye — you're on watch\n"
+        f"{'=' * 40}\n\n"
+        f"{greet[:-1] if greet.endswith(',') else greet}\n\n"
+        f"We just started monitoring {n} {plural} for you "
+        f"{location_line}{price_line}.\n\n"
+        f"WATCHING:\n{kw_text}\n\n"
+        f"{'-' * 40}\n"
+        f"How alerts work:\n"
+        f"  * We poll Marketplace every minute on each watch.\n"
+        f"  * Every new listing is scored against real comp data.\n"
+        f"  * You'll get an instant email when something scores >= {score_threshold}.\n"
+        f"  * Once a day, a summary of everything else we appraised.\n\n"
+        f"bullseye · est. 2026\n"
+    )
+
+    result = send_email(to=email, subject=subject, html=html, text=text)
+    out = {"ok": result.ok, "backend": result.backend, "message": result.message}
+
+    # Stamp confirmation_sent_at on the subscriber rows we just created so
+    # we don't double-send if the user re-saves the same watch later.
+    if result.ok:
+        try:
+            with get_conn() as conn:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """UPDATE subscribers SET confirmation_sent_at = NOW()
+                               WHERE email = %s AND confirmation_sent_at IS NULL""",
+                            (email,),
+                        )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("could not stamp confirmation_sent_at: %s", e)
+
+    logger.info(
+        "confirmation email to=%s n=%d backend=%s ok=%s",
+        email, n, result.backend, result.ok,
+    )
+    return out

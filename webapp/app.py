@@ -369,6 +369,30 @@ def _resolve_home_location() -> tuple[float, float]:
     return 49.2827, -123.1207
 
 
+def _resolve_home_label() -> str | None:
+    """Get the configured home label string for friendly emails. None
+    if no home location is set."""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT home_label FROM user_settings WHERE user_id = 1",
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    # Display names from Nominatim are long. Trim to
+                    # the first comma-separated chunk (e.g.
+                    # "Vancouver, Metro Vancouver, BC, Canada" -> "Vancouver, BC, Canada"
+                    # actually -> just take the first two chunks for brevity).
+                    parts = [p.strip() for p in row[0].split(",")]
+                    if len(parts) >= 3:
+                        return f"{parts[0]}, {parts[-2]}, {parts[-1]}"
+                    return row[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 # In-memory cache for geocoding queries. Nominatim is rate-limited
 # (1 req/sec); caching repeated keystrokes saves their server and ours.
 _GEOCODE_CACHE: dict[str, list[dict]] = {}
@@ -563,12 +587,34 @@ def api_searches_bulk():
             f"@ score ≥ {sub_threshold}"
         )
 
+    # Fire a confirmation email so the user sees an immediate "we're
+    # watching" receipt instead of a silent panel close. Best-effort —
+    # the save has already committed; an email failure shouldn't 500.
+    confirmation_status = None
+    if sub_email and (created or duplicate):
+        try:
+            from deal_finder.alerts.digest import send_confirmation_email
+            home_label = _resolve_home_label()
+            confirmation_status = send_confirmation_email(
+                email=sub_email,
+                name=sub_name,
+                keywords=keywords,
+                radius_km=radius_km,
+                home_label=home_label,
+                score_threshold=sub_threshold,
+                price_min=price_min,
+                price_max=price_max,
+            )
+        except Exception as e:  # noqa: BLE001
+            confirmation_status = {"ok": False, "message": str(e)}
+
     return jsonify({
         "ok": True,
         "created": created,
         "duplicate": duplicate,
         "subscribed_to": subscribed_to,
         "summary": " · ".join(summary_bits),
+        "confirmation": confirmation_status,
     })
 
 

@@ -48,13 +48,24 @@ def send_email(*, to: str, subject: str, html: str, text: str = "") -> EmailResu
 
 def _send_console(*, to: str, subject: str, html: str, text: str) -> EmailResult:
     body = text or html
+    # Windows cp1252 consoles can't encode unicode like '≥' or '·'.
+    # Encode-decode with 'replace' so the dump never crashes.
+    def _safe(s: str) -> str:
+        try:
+            return s.encode("utf-8", "replace").decode(
+                getattr(__import__("sys").stdout, "encoding", "utf-8") or "utf-8",
+                "replace",
+            )
+        except Exception:  # noqa: BLE001
+            return s.encode("ascii", "replace").decode("ascii")
+
     print("\n" + "=" * 72)
-    print(f"To:      {to}")
-    print(f"Subject: {subject}")
+    print(_safe(f"To:      {to}"))
+    print(_safe(f"Subject: {subject}"))
     print("-" * 72)
-    print(body[:4000])
+    print(_safe(body[:4000]))
     if len(body) > 4000:
-        print(f"… ({len(body)-4000} more chars truncated)")
+        print(f"... ({len(body)-4000} more chars truncated)")
     print("=" * 72 + "\n")
     return EmailResult(ok=True, backend="console", message="printed to stdout")
 
