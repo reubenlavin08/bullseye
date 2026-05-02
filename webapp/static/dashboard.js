@@ -55,8 +55,16 @@
     // Data lives on /api/dashboard/summary as data.poll_timer. The summary
     // endpoint is hit every 5s. Between resyncs we tick the countdown
     // down once a second locally so it feels alive.
+    //
+    // The countdown is anchored to a wall-clock TARGET timestamp, not
+    // re-derived from the server's `next_attempt_in_s` on every sync.
+    // Without this anchor, integer rounding on the server side caused
+    // the displayed seconds to "stutter" (e.g. ...12, 11, 11, 9, 8...) as
+    // each 5s sync tweaked the residual by ±1s. Anchor only re-syncs
+    // when state changes or the cooldown extends.
     let pollTimerData = null;
-    let pollTimerLastSync = 0;
+    let pollTimerAnchor = null;       // wall-clock ms when next attempt fires
+    let pollTimerLastState = null;
 
     function formatCountdown(s) {
         if (s <= 0) return "now";
@@ -70,9 +78,13 @@
         if (!pollTimerData) return;
         const t = pollTimerData;
 
-        // Local-tick: subtract elapsed seconds since the last server resync.
-        const elapsed = Math.floor((Date.now() - pollTimerLastSync) / 1000);
-        const remaining = Math.max(0, t.next_attempt_in_s - elapsed);
+        // Anchor-based countdown: round CEIL so we don't appear to skip
+        // a second when wall-clock crosses a half-second boundary
+        // mid-render. Use Math.ceil((target - now) / 1000) so display
+        // value is monotone non-increasing between syncs.
+        const remaining = pollTimerAnchor === null
+            ? t.next_attempt_in_s
+            : Math.max(0, Math.ceil((pollTimerAnchor - Date.now()) / 1000));
 
         const block = document.getElementById("poll-timer-block");
         const wrap  = block.querySelector(".poll-timer");
@@ -135,15 +147,17 @@
         const h = t.fb_health || "unknown";
         badge.dataset.health = h;
         badge.textContent =
-            h === "ok"       ? "FB OK" :
-            h === "blocked"  ? "WE'RE FLAGGED" :
-            h === "fb_down"  ? "FB DOWN" :
-                               "FB ?";
+            h === "ok"            ? "FB OK" :
+            h === "graphql_gated" ? "GRAPHQL GATED" :
+            h === "blocked"       ? "FULLY FLAGGED" :
+            h === "fb_down"       ? "FB DOWN" :
+                                    "FB ?";
         badge.title =
-            h === "ok"       ? "Health probe says FB is up and our session is unblocked." :
-            h === "blocked"  ? "Health probe says FB is up but our IP/fingerprint is flagged." :
-            h === "fb_down"  ? "Health probe couldn't reach FB; FB itself looks down." :
-                               "No probe has run yet this run.";
+            h === "ok"            ? "HTML probe is clean and no recent GraphQL rate-limits — fully unblocked." :
+            h === "graphql_gated" ? "HTML probe says FB is up, but GraphQL search is still rate-limiting our IP. Different WAF policies — common during a per-IP quota block. Cooldown will retry." :
+            h === "blocked"       ? "HTML probe was rejected — we're severely flagged. curl_cffi fingerprint isn't enough; need a different IP/proxy or wait for the block to age out." :
+            h === "fb_down"       ? "Health probe couldn't reach FB; FB itself looks down." :
+                                    "No probe has run yet this run.";
 
         // Progress bar — represents REMAINING time. Starts full and
         // shrinks toward 0 as we approach the next attempt. (Was
@@ -166,11 +180,22 @@
             pill.querySelector(".status-text").textContent =
                 data.alive ? "scheduler · live" : "scheduler · offline";
 
-            // Poll timer — capture data + resync timestamp; renderPollTimer
-            // pulls from these locals + decays remaining via wall-clock.
+            // Poll timer — capture data + decide whether to re-anchor
+            // the countdown target. We re-anchor on state change or
+            // when the new target is materially LATER than current
+            // (cooldown extended). Small downward drift is ignored so
+            // the display ticks smoothly between syncs.
             if (data.poll_timer) {
                 pollTimerData = data.poll_timer;
-                pollTimerLastSync = Date.now();
+                const newAnchor = Date.now() + data.poll_timer.next_attempt_in_s * 1000;
+                if (
+                    pollTimerAnchor === null ||
+                    data.poll_timer.state !== pollTimerLastState ||
+                    newAnchor > pollTimerAnchor + 2000   // cooldown extended
+                ) {
+                    pollTimerAnchor = newAnchor;
+                    pollTimerLastState = data.poll_timer.state;
+                }
                 renderPollTimer();
             }
 

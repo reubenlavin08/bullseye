@@ -885,6 +885,12 @@ RATE_LIMIT_WINDOW_S = int(os.environ.get("RATE_LIMIT_WINDOW_S", "1800"))  # 30 m
 
 # Module-level state so we only log "entered cooldown" once, not every tick.
 _last_logged_cooldown_until: float = 0.0
+# Heartbeat: during sustained cooldown we still want to record SOMETHING
+# every minute or so, otherwise the dashboard's alive-check sees no
+# events and (incorrectly) flags us as offline. This timestamp is the
+# wall-clock of the most recent scheduler_heartbeat we recorded.
+_last_heartbeat_t: float = 0.0
+HEARTBEAT_INTERVAL_S = 60
 
 
 def coordinator_tick() -> None:
@@ -1099,15 +1105,16 @@ def _circuit_breaker_should_skip() -> bool:
 
 def _should_skip_tick_for_backoff() -> bool:
     """Skip this tick if we're inside the rate-limit cooldown window."""
-    global _last_logged_cooldown_until
+    global _last_logged_cooldown_until, _last_heartbeat_t
     remaining = _compute_cooldown_remaining_s()
     if remaining <= 0:
         return False
 
-    # Log "entered cooldown" once per cooldown period, not every tick.
-    cooldown_until = time.time() + remaining
+    now = time.time()
+    cooldown_until = now + remaining
+
+    # Log "entered cooldown" once per new/extended cooldown period.
     if cooldown_until > _last_logged_cooldown_until + 5:
-        # New / extended cooldown — log it and emit a dashboard event.
         logger.warning(
             "coordinator: rate-limit cooldown active — skipping ticks for ~%ds",
             remaining,
@@ -1117,6 +1124,20 @@ def _should_skip_tick_for_backoff() -> bool:
             cooldown_remaining_s=remaining,
         )
         _last_logged_cooldown_until = cooldown_until
+        _last_heartbeat_t = now  # the backoff event itself counts as a heartbeat
+    elif (now - _last_heartbeat_t) > HEARTBEAT_INTERVAL_S:
+        # Periodic heartbeat so the dashboard alive-check doesn't
+        # falsely flag us as offline while we're correctly waiting out
+        # a long cooldown. Cheap event row, no FB request.
+        record_event(
+            "scheduler_heartbeat",
+            state="cooldown",
+            cooldown_remaining_s=remaining,
+        )
+        _last_heartbeat_t = now
+        logger.debug(
+            "coordinator: heartbeat (cooldown ~%ds remaining)", remaining,
+        )
     else:
         logger.debug(
             "coordinator: still in cooldown (~%ds remaining)", remaining,

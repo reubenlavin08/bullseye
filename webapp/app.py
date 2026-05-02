@@ -440,20 +440,37 @@ def _compute_poll_timer() -> dict:
         # we don't have the next_run_time across processes.
         next_in = DEFAULT_TICK
 
-    # FB health classification: did the most recent half-open probe
-    # say FB is up (we're flagged), down (FB is broken), or ok (we're
-    # unblocked). Goes to the dashboard banner so users can tell why
-    # nothing is happening.
+    # FB health classification — combines the most recent HTML probe
+    # result with whether GraphQL is currently rate-limiting. The two
+    # endpoints have DIFFERENT WAF policies:
+    #   * HTML root: lenient. Real users hit it constantly so blocks
+    #     here mean we're severely flagged.
+    #   * GraphQL search: strict per-IP quota. Common to be gated here
+    #     even when HTML is fine.
+    # So 'probe ok + recent rate-limit' is its own state.
     probe_result = probe_row[0] if probe_row else None
     probe_at = probe_row[1].isoformat() if probe_row else None
+
+    # "Recent" rate-limit = within the last 5 min. If we got rate-limited
+    # AFTER the most recent probe (or no probe yet), GraphQL is still
+    # gated even if HTML probe says 'ok'.
+    rl_after_probe = (
+        rl_last is not None and
+        (probe_row is None or rl_last > probe_row[1])
+    )
+    very_recent_rl = rl_last is not None and (now - rl_last).total_seconds() < 300
+
     if probe_result == "blocked":
-        fb_health = "blocked"           # FB up, our IP/fingerprint flagged
+        fb_health = "blocked"           # HTML probe rejected — severely flagged
     elif probe_result == "down":
         fb_health = "fb_down"           # FB itself looks broken
+    elif probe_result == "ok" and very_recent_rl and rl_after_probe:
+        fb_health = "graphql_gated"     # HTML clear but GraphQL still rate-limited
     elif probe_result == "ok":
-        fb_health = "ok"                # circuit closed, healthy
+        fb_health = "ok"                # circuit fully closed
     else:
-        fb_health = "unknown"           # haven't probed yet this run
+        # No probe yet. If we have very recent rate-limits, it's gated.
+        fb_health = "graphql_gated" if very_recent_rl else "unknown"
 
     return {
         "state": state,
@@ -491,9 +508,20 @@ def api_dashboard_summary():
         with conn.cursor() as cur:
             # Is the scheduler alive? -> any 'poll' or 'reload' event in the
             # last 90 seconds.
+            # Alive check: any event-type the scheduler emits qualifies
+            # as a heartbeat. During an extended cooldown, polls and
+            # reloads can both go quiet (poll won't fire, reload only
+            # emits when the active-watch count CHANGES) — but the
+            # scheduler is still healthy, just dutifully skipping ticks.
+            # rate_limit_backoff, fb_probe, scheduler_heartbeat,
+            # slow_start_ramp, fb_rate_limit are all proof-of-life.
             cur.execute(
                 """SELECT MAX(created_at) FROM scheduler_events
-                   WHERE event_type IN ('poll','reload','safety_drain','scheduler_boot')""",
+                   WHERE event_type IN (
+                       'poll','reload','safety_drain','scheduler_boot',
+                       'rate_limit_backoff','fb_probe','scheduler_heartbeat',
+                       'slow_start_ramp','fb_rate_limit'
+                   )""",
             )
             last_event = cur.fetchone()[0]
 
@@ -597,14 +625,15 @@ def api_dashboard_summary():
 
 
 def _is_alive(last_event) -> bool:
-    """Heuristic: scheduler is 'alive' if it produced an event in the
-    last 90 seconds. Polls fire at most every 60s; reload every 20s;
-    so 90s comfortably covers either."""
+    """Heuristic: scheduler is 'alive' if it produced ANY event in the
+    last 120 seconds. Coordinator ticks fire every 20s and even when
+    skipping for cooldown they emit a scheduler_heartbeat at least
+    every 60s. 120s covers a single missed heartbeat without a false
+    alarm."""
     if last_event is None:
         return False
-    from datetime import datetime as _dt, timezone as _tz
-    age = (_dt.now(_tz.utc) - last_event).total_seconds()
-    return age < 90
+    age = (datetime.now(timezone.utc) - last_event).total_seconds()
+    return age < 120
 
 
 @app.route("/api/dashboard/events")
