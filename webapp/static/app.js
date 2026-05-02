@@ -815,6 +815,185 @@
         );
     }
 
+    // --- Per-watch dashboard (Manage tab) -----------------------------
+    //
+    // Lists every watch with its threshold + activity stats. Inline
+    // controls for: pause/resume, edit threshold, delete. Optimistic
+    // updates: we patch the row UI immediately and revert on failure
+    // rather than waiting for the round trip.
+
+    function setupWatchesDashboard() {
+        const list = document.getElementById("watches-list");
+        const refreshBtn = document.getElementById("watches-refresh");
+        if (!list) return;
+
+        // Refresh whenever the Manage tab becomes active OR the user
+        // clicks the refresh button OR a watch was just created.
+        async function load() {
+            try {
+                const res = await fetch("/api/watches");
+                const data = await res.json();
+                render(data.watches || []);
+            } catch (err) {
+                list.innerHTML =
+                    '<div class="watches-empty muted is-error">' +
+                    'failed to load: ' + escapeHtml(err.message) + '</div>';
+            }
+        }
+
+        function render(watches) {
+            if (watches.length === 0) {
+                list.innerHTML =
+                    '<div class="watches-empty muted">' +
+                    'no watches yet — save one in the <em>Single</em> or <em>List</em> tab.' +
+                    '</div>';
+                return;
+            }
+            list.innerHTML = watches.map(renderRow).join("");
+            list.querySelectorAll(".watch-row").forEach(wireRow);
+        }
+
+        function renderRow(w) {
+            const active = w.active ? "is-active" : "is-paused";
+            const status = w.active ? "live" : "paused";
+            const thresh = w.score_threshold ?? "—";
+            const lastScrape = w.last_scrape ? timeAgo(w.last_scrape) : "never polled";
+            const radius = w.radius_km ?? "—";
+            const priceHint =
+                w.price_min && w.price_max ? `$${w.price_min}–$${w.price_max}` :
+                w.price_max ? `≤ $${w.price_max}` :
+                w.price_min ? `≥ $${w.price_min}` : "any price";
+
+            return (
+                `<div class="watch-row ${active}" data-watch-id="${w.id}">` +
+                  `<div class="watch-line-1">` +
+                    `<span class="watch-status">${status}</span>` +
+                    `<strong class="watch-keyword">${escapeHtml(w.keyword)}</strong>` +
+                    `<span class="watch-meta muted">${radius}km · ${escapeHtml(priceHint)}</span>` +
+                  `</div>` +
+                  `<div class="watch-line-2">` +
+                    `<span class="watch-stat">${w.hit_count}<small>hits</small></span>` +
+                    `<span class="watch-stat">${w.total_seen}<small>seen</small></span>` +
+                    `<span class="watch-stat watch-thresh">` +
+                      `<span class="thresh-label">alert ≥</span>` +
+                      `<input type="number" class="thresh-input" value="${thresh}" min="0" max="100" />` +
+                    `</span>` +
+                    `<span class="watch-last muted">${escapeHtml(lastScrape)}</span>` +
+                  `</div>` +
+                  `<div class="watch-actions">` +
+                    `<button class="btn-tiny btn-pause" type="button">` +
+                      (w.active ? "Pause" : "Resume") + `</button>` +
+                    `<button class="btn-tiny btn-delete" type="button">Delete</button>` +
+                  `</div>` +
+                `</div>`
+            );
+        }
+
+        function wireRow(row) {
+            const id = row.dataset.watchId;
+            const pauseBtn = row.querySelector(".btn-pause");
+            const deleteBtn = row.querySelector(".btn-delete");
+            const threshInput = row.querySelector(".thresh-input");
+
+            pauseBtn.addEventListener("click", async () => {
+                const wasActive = row.classList.contains("is-active");
+                pauseBtn.disabled = true;
+                const ok = await patchWatch(id, { active: (!wasActive).toString() });
+                pauseBtn.disabled = false;
+                if (ok) load();
+            });
+
+            deleteBtn.addEventListener("click", async () => {
+                const kw = row.querySelector(".watch-keyword").textContent;
+                if (!confirm(`Delete watch "${kw}"? This cannot be undone.`)) return;
+                deleteBtn.disabled = true;
+                try {
+                    const res = await fetch("/api/watches/" + id, { method: "DELETE" });
+                    const data = await res.json();
+                    if (data.ok) {
+                        row.style.opacity = "0";
+                        setTimeout(load, 220);
+                    } else {
+                        alert("Couldn't delete: " + (data.error || "unknown"));
+                        deleteBtn.disabled = false;
+                    }
+                } catch (err) {
+                    alert("Network error: " + err.message);
+                    deleteBtn.disabled = false;
+                }
+            });
+
+            // Threshold edit: commit on blur or Enter
+            const commitThresh = async () => {
+                const v = parseInt(threshInput.value, 10);
+                if (isNaN(v) || v < 0 || v > 100) {
+                    threshInput.classList.add("is-error");
+                    return;
+                }
+                threshInput.classList.remove("is-error");
+                threshInput.disabled = true;
+                const ok = await patchWatch(id, { score_threshold: v.toString() });
+                threshInput.disabled = false;
+                if (ok) {
+                    threshInput.classList.add("just-saved");
+                    setTimeout(() => threshInput.classList.remove("just-saved"), 800);
+                }
+            };
+            threshInput.addEventListener("blur", commitThresh);
+            threshInput.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") { e.preventDefault(); threshInput.blur(); }
+            });
+        }
+
+        async function patchWatch(id, body) {
+            try {
+                const fd = new FormData();
+                Object.entries(body).forEach(([k, v]) => fd.append(k, v));
+                const res = await fetch("/api/watches/" + id, {
+                    method: "PATCH",
+                    body: fd,
+                });
+                const data = await res.json();
+                if (!data.ok) {
+                    alert("Couldn't save: " + (data.error || "unknown"));
+                    return false;
+                }
+                return true;
+            } catch (err) {
+                alert("Network error: " + err.message);
+                return false;
+            }
+        }
+
+        // Refresh hooks
+        refreshBtn?.addEventListener("click", load);
+        // Auto-load when the Manage tab is opened
+        document.querySelectorAll('.tab-btn[data-tab="manage"]').forEach((btn) => {
+            btn.addEventListener("click", load);
+        });
+        // Initial load lazy: only when the panel actually opens
+        const panelRight = document.getElementById("panel-right");
+        if (panelRight) {
+            const obs = new MutationObserver(() => {
+                if (panelRight.classList.contains("is-open")) load();
+            });
+            obs.observe(panelRight, { attributes: true, attributeFilter: ["class"] });
+        }
+    }
+
+    // Pretty "X minutes ago" formatting for last-scrape timestamps.
+    function timeAgo(iso) {
+        const t = new Date(iso).getTime();
+        const diff = Math.max(0, Date.now() - t);
+        const m = Math.floor(diff / 60000);
+        if (m < 1) return "just now";
+        if (m < 60) return m + " min ago";
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + "h ago";
+        const d = Math.floor(h / 24);
+        return d + "d ago";
+    }
+
     function bootAll() {
         init();
         setupReveal();
@@ -824,6 +1003,7 @@
         setupSingleForm();
         setupBulkForm();
         setupSubscribeForm();
+        setupWatchesDashboard();
         setupSearchScroll();
     }
 

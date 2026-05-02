@@ -112,6 +112,11 @@ def _send_resend(*, to: str, subject: str, html: str, text: str) -> EmailResult:
             ok=False, backend="resend",
             message="RESEND_API_KEY and ALERT_FROM_EMAIL required",
         )
+    # Wrap in a display name so the inbox shows "bullseye" rather than
+    # the bare "onboarding@resend.dev" — unless the user already
+    # provided their own display-name format ("Foo <foo@bar.com>").
+    if "<" not in from_addr:
+        from_addr = f"bullseye <{from_addr}>"
     payload = {
         "from": from_addr,
         "to": to,

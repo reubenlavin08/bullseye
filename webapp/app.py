@@ -286,6 +286,172 @@ def api_searches():
     return jsonify({"searches": rows})
 
 
+# ----- Per-watch dashboard endpoints --------------------------------------
+#
+# /api/watches      GET   list every watch (active + inactive) with subscriber
+#                         info + recent hit count
+# /api/watches/<id> PATCH update threshold / active / daily_summary_enabled
+#                         / price_min / price_max / radius_km
+# /api/watches/<id> DELETE delete the watch + cascade subscribers
+#
+# A "watch" in UI terms = (user_searches row joined with subscriber row for
+# the current single user). For multi-user we'd scope by user_id.
+
+@app.route("/api/watches", methods=["GET"])
+def api_watches_list():
+    """List every saved watch with subscriber prefs + recent activity stats."""
+    rows = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT
+                       us.id, us.keyword, us.radius_km, us.price_min, us.price_max,
+                       us.latitude, us.longitude, us.active, us.created_at,
+                       s.email, s.score_threshold, s.daily_summary_enabled,
+                       (SELECT COUNT(*) FROM listings l
+                          WHERE l.search_id = us.id) AS total_seen,
+                       (SELECT COUNT(*) FROM listings l
+                          WHERE l.search_id = us.id
+                            AND l.deal_score IS NOT NULL
+                            AND l.deal_score >= COALESCE(s.score_threshold, 70)
+                            AND l.rejected = FALSE) AS hit_count,
+                       (SELECT MAX(l.scraped_at) FROM listings l
+                          WHERE l.search_id = us.id) AS last_scrape
+                   FROM user_searches us
+                   LEFT JOIN subscribers s ON s.search_id = us.id
+                   ORDER BY us.active DESC, us.id DESC""",
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0],
+                    "keyword": r[1],
+                    "radius_km": r[2],
+                    "price_min": r[3],
+                    "price_max": r[4],
+                    "latitude": float(r[5]) if r[5] is not None else None,
+                    "longitude": float(r[6]) if r[6] is not None else None,
+                    "active": bool(r[7]),
+                    "created_at": r[8].isoformat() if r[8] else None,
+                    "email": r[9],
+                    "score_threshold": r[10] if r[10] is not None else None,
+                    "daily_summary_enabled": bool(r[11]) if r[11] is not None else False,
+                    "total_seen": int(r[12] or 0),
+                    "hit_count": int(r[13] or 0),
+                    "last_scrape": r[14].isoformat() if r[14] else None,
+                })
+    return jsonify({"watches": rows})
+
+
+@app.route("/api/watches/<int:watch_id>", methods=["PATCH"])
+def api_watches_patch(watch_id: int):
+    """Update one watch's prefs. Form-encoded or JSON body, partial updates ok.
+
+    Editable fields:
+      active                  bool — turn the watch on/off (also pauses alerts)
+      score_threshold         int 0-100 (subscriber row)
+      daily_summary_enabled   bool (subscriber row)
+      radius_km               int 1-500
+      price_min               int or null
+      price_max               int or null
+    """
+    data = request.form if request.form else (request.get_json(silent=True) or {})
+
+    # Coerce inputs. Allow null/'' to mean "unset" for nullable fields.
+    def _opt_int(name: str) -> int | None:
+        v = data.get(name)
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be an integer")
+
+    def _opt_bool(name: str) -> bool | None:
+        if name not in data:
+            return None
+        v = data.get(name)
+        if isinstance(v, bool):
+            return v
+        return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+    # us_* updates the user_searches row, sub_* updates subscribers
+    us_updates: dict[str, object] = {}
+    sub_updates: dict[str, object] = {}
+
+    try:
+        if "active" in data:
+            us_updates["active"] = _opt_bool("active")
+            # Mirror to subscribers so the digest worker also stops emailing
+            sub_updates["active"] = us_updates["active"]
+        if "radius_km" in data:
+            r_km = _opt_int("radius_km")
+            if r_km is None or not (1 <= r_km <= 500):
+                return jsonify({"ok": False, "error": "radius_km must be 1-500"}), 400
+            us_updates["radius_km"] = r_km
+        if "price_min" in data:
+            us_updates["price_min"] = _opt_int("price_min")
+        if "price_max" in data:
+            us_updates["price_max"] = _opt_int("price_max")
+        if "score_threshold" in data:
+            t = _opt_int("score_threshold")
+            if t is None or not (0 <= t <= 100):
+                return jsonify({"ok": False, "error": "score_threshold must be 0-100"}), 400
+            sub_updates["score_threshold"] = t
+        if "daily_summary_enabled" in data:
+            sub_updates["daily_summary_enabled"] = _opt_bool("daily_summary_enabled")
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    if not us_updates and not sub_updates:
+        return jsonify({"ok": False, "error": "no valid fields to update"}), 400
+
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                # Confirm the watch exists
+                cur.execute("SELECT 1 FROM user_searches WHERE id = %s", (watch_id,))
+                if cur.fetchone() is None:
+                    return jsonify({"ok": False, "error": "watch not found"}), 404
+
+                if us_updates:
+                    set_clause = ", ".join(f"{k} = %s" for k in us_updates)
+                    vals = list(us_updates.values()) + [watch_id]
+                    cur.execute(
+                        f"UPDATE user_searches SET {set_clause} WHERE id = %s",
+                        vals,
+                    )
+
+                if sub_updates:
+                    set_clause = ", ".join(f"{k} = %s" for k in sub_updates)
+                    vals = list(sub_updates.values()) + [watch_id]
+                    cur.execute(
+                        f"UPDATE subscribers SET {set_clause} WHERE search_id = %s",
+                        vals,
+                    )
+
+    return jsonify({"ok": True, "id": watch_id, "updated": {**us_updates, **sub_updates}})
+
+
+@app.route("/api/watches/<int:watch_id>", methods=["DELETE"])
+def api_watches_delete(watch_id: int):
+    """Delete a watch outright. Subscribers cascade via FK ON DELETE CASCADE.
+
+    Listings tied to this search keep search_id NULL'd (FK ON DELETE SET NULL)
+    — they stay in the DB for historical comp data but become orphan rows.
+    """
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM user_searches WHERE id = %s RETURNING keyword",
+                    (watch_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return jsonify({"ok": False, "error": "watch not found"}), 404
+    return jsonify({"ok": True, "id": watch_id, "keyword": row[0]})
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
     """Read or upsert the single-user home location.

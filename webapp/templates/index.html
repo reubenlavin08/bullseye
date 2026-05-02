@@ -158,10 +158,11 @@
 
             <div class="receipt-divider"></div>
 
-            <!-- Tabs: single | bulk -->
+            <!-- Tabs: single | bulk | manage -->
             <div class="tab-bar" role="tablist">
-                <button class="tab-btn is-active" data-tab="single" role="tab">Single watch</button>
-                <button class="tab-btn" data-tab="bulk" role="tab">List of items</button>
+                <button class="tab-btn is-active" data-tab="single" role="tab">Single</button>
+                <button class="tab-btn" data-tab="bulk" role="tab">List</button>
+                <button class="tab-btn" data-tab="manage" role="tab">Manage</button>
             </div>
 
             <!-- SINGLE -->
@@ -273,6 +274,21 @@ multimeter"
                     <button type="submit" class="btn btn-accent">Save watches + alerts</button>
                 </form>
                 <div id="bulk-banner" class="subscribe-banner" hidden></div>
+            </div>
+
+            <!-- MANAGE -->
+            <div class="tab-pane" data-pane="manage">
+                <div class="manage-head">
+                    <span class="receipt-stamp">your watches</span>
+                    <button id="watches-refresh" class="btn-tiny" type="button">↻ refresh</button>
+                </div>
+                <p class="muted manage-hint">
+                    edit alert thresholds, pause a watch, or delete it.
+                    changes apply on the scheduler's next reload tick (~20s).
+                </p>
+                <div id="watches-list" class="watches-list">
+                    <div class="watches-empty muted">loading watches…</div>
+                </div>
             </div>
         </div>
     </aside>

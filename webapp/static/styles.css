@@ -1660,6 +1660,203 @@ em, .italic {
     letter-spacing: 0.06em;
 }
 
+/* ---------- Per-watch dashboard (Manage tab) -------------------------- */
+
+.manage-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.manage-hint {
+    font-size: 11px;
+    line-height: 1.55;
+    margin: 0 0 8px;
+    font-family: var(--font-mono);
+}
+
+.btn-tiny {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    color: var(--fg-muted);
+    padding: 4px 10px;
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 180ms var(--ease);
+}
+.btn-tiny:hover { border-color: var(--accent); color: var(--accent); }
+.btn-tiny:disabled { opacity: 0.5; cursor: default; }
+
+.btn-tiny.btn-delete:hover {
+    border-color: var(--bad);
+    color: var(--bad);
+    background: rgba(154, 42, 42, 0.06);
+}
+
+.watches-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.watches-empty {
+    padding: 28px 18px;
+    text-align: center;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+}
+.watches-empty.is-error { color: var(--bad); border-color: rgba(154, 42, 42, 0.4); }
+
+.watch-row {
+    background: rgba(255, 252, 244, 0.65);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: opacity 220ms var(--ease), border-color 200ms var(--ease);
+}
+.watch-row.is-paused {
+    background: rgba(63, 23, 24, 0.04);
+    opacity: 0.72;
+}
+.watch-row:hover { border-color: var(--fg); }
+
+.watch-line-1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.watch-status {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid;
+}
+.watch-row.is-active .watch-status {
+    color: var(--good);
+    border-color: rgba(93, 107, 58, 0.5);
+    background: rgba(93, 107, 58, 0.08);
+}
+.watch-row.is-paused .watch-status {
+    color: var(--fg-muted);
+    border-color: var(--border-strong);
+    background: var(--bg-elev);
+}
+
+.watch-keyword {
+    font-family: var(--font-slab);
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--fg);
+    letter-spacing: 0.01em;
+}
+
+.watch-meta {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.06em;
+    margin-left: auto;
+    text-transform: uppercase;
+}
+
+.watch-line-2 {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 4px 0 2px;
+    border-top: 1px dashed var(--border);
+}
+
+.watch-stat {
+    font-family: var(--font-slab);
+    font-size: 18px;
+    color: var(--fg);
+    line-height: 1;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+}
+.watch-stat small {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    font-weight: 700;
+}
+
+.watch-thresh {
+    font-size: 11px;
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+.watch-thresh .thresh-label {
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+.thresh-input {
+    width: 48px;
+    padding: 4px 6px;
+    background: rgba(255, 252, 244, 0.85);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    font-family: var(--font-slab);
+    font-size: 14px;
+    text-align: center;
+    transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease);
+}
+.thresh-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.thresh-input.is-error { border-color: var(--bad); color: var(--bad); }
+.thresh-input.just-saved {
+    border-color: var(--good);
+    box-shadow: 0 0 0 3px rgba(93, 107, 58, 0.18);
+}
+
+.watch-last {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+}
+
+.watch-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+}
+
 /* ---------- Reveal-on-scroll ---------- */
 
 .reveal {
