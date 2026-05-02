@@ -1,23 +1,15 @@
-# One keyword per line. Substring match (case-insensitive) against title only.
+# One keyword per line. Substring match (case-insensitive) against TITLE ONLY.
+# (Service-listing detection lives in rejection_patterns.txt instead so it
+# also scans descriptions — sellers often disguise services with normal
+# product-sounding titles.)
 # Lines starting with # and blank lines are ignored.
 # Note: "free" is intentionally absent — free listings are scored normally
 # (handled by the price extraction layer).
 
-# Items unsuitable for scoring (parts, lots, broken)
+# Items unsuitable for scoring (bundles, parts, broken)
 curb alert
 lot
 bundle
 parts only
 for parts
 not working
-
-# Service listings (someone offering labor, not selling an item)
-installation service
-repair service
-mobile detail
-mobile mechanic
-detailing service
-tuning service
-tutoring
-lessons
-appointment booking

@@ -27,6 +27,7 @@ from ..db.listings import update_appraisal, update_comps_resolution
 from ..db.comps import CompStats
 from ..scraper.facebook_detail import get_default_client as get_detail_client
 from ..scraper.price_extraction import resolve_price
+from ..scraper.rejection import evaluate as evaluate_rejection
 from .formula import compute_score, llm_needed
 from .normalizer import (
     DEFAULT_MODEL as NORMALIZER_MODEL,
@@ -199,6 +200,32 @@ def _process_one(
         if detail.description:
             description = detail.description
             asking, price_extracted = _recover_price(raw_price, description)
+
+            # Re-run rejection filter against the newly-recovered
+            # description. The original scrape didn't have it, so trade
+            # / service / wanted patterns hidden in description were
+            # missed. Bail out + persist as rejected if we now match.
+            rj = evaluate_rejection(title, description=description)
+            if rj.rejected:
+                logger.info(
+                    "%s rejected after JIT description: %s",
+                    listing_id, rj.reason,
+                )
+                with get_conn() as conn:
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """UPDATE listings SET
+                                      description = %s,
+                                      detail_source = %s,
+                                      rejected = TRUE,
+                                      rejection_reason = %s
+                                   WHERE id = %s""",
+                                (description, detail.source, rj.reason,
+                                 listing_id),
+                            )
+                return False
+
             # Persist the rescued data so we don't refetch next cycle.
             with get_conn() as conn:
                 with conn:

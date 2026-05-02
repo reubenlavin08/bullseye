@@ -10,12 +10,34 @@
 \bwill trade\b
 \bpartial trade\b
 
-# Service listings (someone offering labor, not selling an item)
-\b(I|we)\s+(do|offer|provide|install|mount|repair|detail)\b
-\binstallation\s+(service|available|included)\b
-\b(mobile|on[\s-]?site)\s+(repair|service)\b
-\b(rates?|pricing)\s+start(s|ing)?\s+(at|from)\b
-\b(per\s+hour|hourly\s+rate|/\s*hr)\b
-\bbook\s+(your|an)\s+appointment\b
-\bcall\s+for\s+(quote|pricing)\b
-\bDM\s+for\s+(rates?|pricing|quote)\b
+# --- Service-selling listings (someone offering labor, not selling an item) ---
+# These match against description too, since the giveaway is often there
+# even when the title looks like a normal item listing.
+
+# First-person service pitches
+\b(I|we)\s+(do|offer|provide|install|mount|repair|detail|tune)\b
+\b(I|we)\s+(can|will)\s+(install|mount|repair|tune|build)\b
+\b(my|our)\s+(shop|business|service|company)\b
+
+# Service-as-noun phrases
+\binstallation\s+(service|available|included|extra)\b
+\b(repair|detailing|mounting|tuning|cleaning|painting|wrap|wrapping)\s+service[s]?\b
+\b(mobile|on[\s-]?site|in[\s-]?home)\s+(repair|service|mechanic|detail)\b
+
+# Pricing language characteristic of services
+\b(rates?|pricing|prices)\s+start(s|ing)?\s+(at|from)\b
+\b(per\s+hour|hourly\s+rate|/\s*hr|/hour)\b
+\b\$\d+\s*/\s*(hr|hour)\b
+\bstarting\s+(at|from)\s+\$\d+\b
+\bbook\s+(your|an|a)\s+(appointment|slot|session)\b
+\bcall\s+for\s+(quote|pricing|rates|appointment)\b
+\b(DM|message|text)\s+for\s+(rates?|pricing|quote|details|appointment)\b
+
+# Tutoring / lessons / coaching (services, not products)
+\b(tutoring|lessons|coaching|training)\s+(available|offered|sessions)\b
+\b(I|we)\s+teach\b
+
+# Rentals / monthly fees (these are services, not item sales)
+\bper\s+(month|week|day)\b
+\bmonthly\s+(fee|rate|payment|rental)\b
+\brent\s+(it|this)\s+for\b

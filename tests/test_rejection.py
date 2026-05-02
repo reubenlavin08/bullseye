@@ -187,3 +187,77 @@ def test_invalid_regex_is_skipped_not_fatal(tmp_path):
     # The valid pattern still works; the invalid one is silently dropped.
     r = evaluate("swap meet item", None, config_dir=tmp_path)
     assert r.rejected is True
+
+
+# --- Real-world service-detection scenarios -----------------------------
+# Use the actual config files so we cover the real production patterns.
+
+def _real_config_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "config"
+
+
+def test_service_with_innocent_title_is_caught_in_description():
+    """Title looks like a normal item listing, but description reveals
+    it's a service. This is the user-reported gap."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="Custom Audio System",
+        description=(
+            "I install custom audio systems in any vehicle. "
+            "Rates starting at $200. DM for quote."
+        ),
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+    assert "pattern" in r.reason
+
+
+def test_hourly_rate_pattern_in_description():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Mechanic services",
+        description="$80/hr labour, mobile available, call for appointment",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_first_person_service_pitch():
+    rejection.reset_cache()
+    r = evaluate(
+        title="iPhone Repair",
+        description="I repair all iPhone models. Same day service.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_legitimate_item_with_we_in_description_not_rejected():
+    """Don't false-positive a legit listing that happens to use 'we'."""
+    rejection.reset_cache()
+    r = evaluate(
+        title="Used iPhone 14 Pro 256GB",
+        description="We're moving and need to sell. Mint condition.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is False
+
+
+def test_dm_for_pricing_pattern():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Window Tint",
+        description="DM for pricing on full vehicle window tinting",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_monthly_fee_caught():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Storage Locker",
+        description="$120 per month, climate controlled.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
