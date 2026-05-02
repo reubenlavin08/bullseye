@@ -459,3 +459,104 @@ a:hover { color: var(--accent); }
 
 .appraise-spinner { color: var(--accent); font-style: italic; }
 .appraise-result { color: var(--fg); }
+
+/* ---------- Comps trust pane ---------- */
+
+.comps-toggle {
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--fg-muted);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    text-align: left;
+    transition: all 120ms ease;
+}
+
+.comps-toggle:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    border-style: solid;
+}
+
+.comps-pane {
+    margin-top: 6px;
+    padding: 10px;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+}
+
+.comps-spinner { color: var(--fg-muted); font-style: italic; }
+
+.comps-summary {
+    color: var(--fg-muted);
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+
+.comps-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.comp-row {
+    display: grid;
+    grid-template-columns: 60px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 4px 0;
+    position: relative;
+    font-size: 11px;
+}
+
+.comp-bar {
+    grid-column: 1 / 4;
+    grid-row: 1;
+    height: 100%;
+    background: rgba(125, 211, 252, 0.05);
+    border-radius: 2px;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.near-median .comp-bar {
+    background: rgba(125, 211, 252, 0.13);
+}
+
+.comp-price {
+    grid-column: 1; grid-row: 1;
+    z-index: 1;
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    font-weight: 600;
+    color: var(--fg);
+}
+
+.near-median .comp-price { color: var(--accent); }
+
+.comp-title {
+    grid-column: 2; grid-row: 1;
+    z-index: 1;
+    color: var(--fg-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.comp-title:hover { color: var(--fg); }
+
+.comp-loc {
+    grid-column: 3; grid-row: 1;
+    z-index: 1;
+    font-size: 10px;
+}

@@ -12,6 +12,112 @@
         document.querySelectorAll(".appraise-btn").forEach(function (btn) {
             btn.addEventListener("click", onAppraiseClick);
         });
+        document.querySelectorAll(".comps-toggle").forEach(function (btn) {
+            btn.addEventListener("click", onCompsToggleClick);
+        });
+    }
+
+    async function onCompsToggleClick(e) {
+        const btn = e.currentTarget;
+        const term = btn.dataset.compTerm;
+        const source = btn.dataset.compSource || "marketplace";
+        const pane = btn.parentElement.querySelector(".comps-pane");
+        const spinner = pane.querySelector(".comps-spinner");
+        const content = pane.querySelector(".comps-content");
+
+        // Toggle: if already loaded and visible, hide; if hidden, show.
+        if (!pane.hidden && content.dataset.loaded === "1") {
+            pane.hidden = true;
+            btn.textContent = btn.textContent.replace("▴", "▾");
+            return;
+        }
+        if (pane.hidden && content.dataset.loaded === "1") {
+            pane.hidden = false;
+            btn.textContent = btn.textContent.replace("▾", "▴");
+            return;
+        }
+
+        if (!term) {
+            content.textContent = "no comp term recorded for this listing";
+            pane.hidden = false;
+            content.dataset.loaded = "1";
+            return;
+        }
+
+        pane.hidden = false;
+        spinner.hidden = false;
+        content.innerHTML = "";
+        btn.disabled = true;
+
+        try {
+            const url = "/api/comps?term=" + encodeURIComponent(term) +
+                        "&source=" + encodeURIComponent(source);
+            const res = await fetch(url);
+            const data = await res.json();
+            renderComps(content, data);
+            content.dataset.loaded = "1";
+            btn.textContent = btn.textContent.replace("▾", "▴");
+        } catch (err) {
+            content.textContent = "Failed to load comps: " + err.message;
+        } finally {
+            spinner.hidden = true;
+            btn.disabled = false;
+        }
+    }
+
+    function renderComps(container, data) {
+        if (!data.rows || data.rows.length === 0) {
+            container.innerHTML = '<div class="muted">' +
+                'No cached comps for "' + escapeHtml(data.term) +
+                '". They may have expired (12h TTL); re-appraise to refresh.' +
+                '</div>';
+            return;
+        }
+        const max = data.max || 1;
+        const median = data.median || 0;
+
+        const header = el("div", "comps-summary",
+            data.sample_size + " comp(s) · " +
+            "median $" + Math.round(data.median) + " · " +
+            "mean $" + Math.round(data.mean) + " · " +
+            "range $" + Math.round(data.min) + "-$" + Math.round(data.max)
+        );
+        container.appendChild(header);
+
+        const list = document.createElement("ul");
+        list.className = "comps-list";
+        data.rows.forEach(function (row) {
+            const li = document.createElement("li");
+            li.className = "comp-row";
+            const isNearMedian = Math.abs(row.price - median) / median < 0.15;
+            if (isNearMedian) li.classList.add("near-median");
+
+            const bar = document.createElement("div");
+            bar.className = "comp-bar";
+            bar.style.width = ((row.price / max) * 100).toFixed(1) + "%";
+
+            const price = document.createElement("span");
+            price.className = "comp-price";
+            price.textContent = "$" + Math.round(row.price);
+
+            const titleEl = document.createElement("a");
+            titleEl.className = "comp-title";
+            titleEl.href = row.listing_url || "#";
+            titleEl.target = "_blank";
+            titleEl.rel = "noopener";
+            titleEl.textContent = row.title || "(no title)";
+
+            const loc = document.createElement("span");
+            loc.className = "comp-loc muted";
+            loc.textContent = row.location || "";
+
+            li.appendChild(bar);
+            li.appendChild(price);
+            li.appendChild(titleEl);
+            li.appendChild(loc);
+            list.appendChild(li);
+        });
+        container.appendChild(list);
     }
 
     async function onAppraiseClick(e) {
