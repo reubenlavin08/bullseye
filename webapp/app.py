@@ -350,15 +350,18 @@ def _compute_poll_timer() -> dict:
     with get_conn() as conn:
         with conn.cursor() as cur:
             # Most recent rate-limit and how many in the last WINDOW seconds.
+            # Pull the epoch too so we can mirror the jitter the
+            # scheduler applies (deterministic per timestamp).
             cur.execute(
                 f"""SELECT
                        COUNT(*),
-                       MAX(created_at)
+                       MAX(created_at),
+                       EXTRACT(EPOCH FROM MAX(created_at))
                    FROM scheduler_events
                    WHERE event_type = 'fb_rate_limit'
                      AND created_at >= NOW() - INTERVAL '{WINDOW} seconds'""",
             )
-            rl_n, rl_last = cur.fetchone()
+            rl_n, rl_last, rl_last_epoch = cur.fetchone()
 
             # Most recent attempt of any kind (poll OR rate-limit hit).
             cur.execute(
@@ -378,13 +381,33 @@ def _compute_poll_timer() -> dict:
             )
             ss_row = cur.fetchone()
 
+            # Most recent fb_probe event tells us whether FB itself is
+            # healthy (down vs blocking us). 'ok' = closed circuit,
+            # 'blocked' = our IP/fingerprint is flagged but FB is up,
+            # 'down' = FB itself looks broken.
+            cur.execute(
+                """SELECT detail->>'result', created_at
+                   FROM scheduler_events
+                   WHERE event_type = 'fb_probe'
+                   ORDER BY created_at DESC
+                   LIMIT 1""",
+            )
+            probe_row = cur.fetchone()
+
     now = datetime.now(timezone.utc)
 
     # --- Cooldown ---
+    # Mirror jobs.py::_compute_cooldown_remaining_s exactly, including
+    # the decorrelated jitter (seeded per (n, last_epoch) so the value
+    # is stable across dashboard polls within a single cooldown window).
     cooldown_remaining = 0
     cooldown_total = 0
     if rl_n and rl_last:
-        cooldown_total = min(BASE * (2 ** min(int(rl_n) - 1, 4)), MAX)
+        nominal = min(BASE * (2 ** min(int(rl_n) - 1, 4)), MAX)
+        import random as _r
+        jitter_seed = int((rl_last_epoch or 0) * 1000) ^ int(rl_n) << 8
+        rng = _r.Random(jitter_seed)
+        cooldown_total = int(nominal * rng.uniform(0.85, 1.15))
         elapsed = (now - rl_last).total_seconds()
         cooldown_remaining = max(0, int(cooldown_total - elapsed))
 
@@ -417,10 +440,27 @@ def _compute_poll_timer() -> dict:
         # we don't have the next_run_time across processes.
         next_in = DEFAULT_TICK
 
+    # FB health classification: did the most recent half-open probe
+    # say FB is up (we're flagged), down (FB is broken), or ok (we're
+    # unblocked). Goes to the dashboard banner so users can tell why
+    # nothing is happening.
+    probe_result = probe_row[0] if probe_row else None
+    probe_at = probe_row[1].isoformat() if probe_row else None
+    if probe_result == "blocked":
+        fb_health = "blocked"           # FB up, our IP/fingerprint flagged
+    elif probe_result == "down":
+        fb_health = "fb_down"           # FB itself looks broken
+    elif probe_result == "ok":
+        fb_health = "ok"                # circuit closed, healthy
+    else:
+        fb_health = "unknown"           # haven't probed yet this run
+
     return {
         "state": state,
         "next_attempt_in_s": int(next_in),
         "last_attempt_iso": last_attempt.isoformat() if last_attempt else None,
+        "fb_health": fb_health,
+        "last_probe_at": probe_at,
         "cooldown": {
             "active": cooldown_remaining > 0,
             "remaining_s": int(cooldown_remaining),

@@ -26,9 +26,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import requests
+from curl_cffi import requests  # type: ignore[import-untyped]
+from curl_cffi.requests import exceptions as cffi_exc  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
+
+_IMPERSONATE_TARGET = "chrome131"
 
 
 # --- Constants ------------------------------------------------------------
@@ -141,7 +144,7 @@ class FacebookDetailClient:
         backoff_base_s: float = 1.0,
         timeout_s: int = 30,
     ):
-        self._session = session or requests.Session()
+        self._session = session or requests.Session(impersonate=_IMPERSONATE_TARGET)
         self._gate = _RateGate(rate_interval_s)
         self._max_retries = max_retries
         self._backoff = backoff_base_s
@@ -304,12 +307,12 @@ class FacebookDetailClient:
                 resp = self._session.post(
                     url, headers=headers, data=data, timeout=self._timeout,
                 )
-            except requests.RequestException as e:
+            except cffi_exc.RequestException as e:
                 last_exc = e
                 self._sleep_backoff(attempt)
                 continue
             if 500 <= resp.status_code < 600:
-                last_exc = requests.HTTPError(
+                last_exc = cffi_exc.HTTPError(
                     f"{resp.status_code} from {url}", response=resp,
                 )
                 self._sleep_backoff(attempt)
@@ -327,12 +330,12 @@ class FacebookDetailClient:
                 resp = self._session.get(
                     url, headers=headers, timeout=self._timeout,
                 )
-            except requests.RequestException as e:
+            except cffi_exc.RequestException as e:
                 last_exc = e
                 self._sleep_backoff(attempt)
                 continue
             if 500 <= resp.status_code < 600:
-                last_exc = requests.HTTPError(
+                last_exc = cffi_exc.HTTPError(
                     f"{resp.status_code} from {url}", response=resp,
                 )
                 self._sleep_backoff(attempt)

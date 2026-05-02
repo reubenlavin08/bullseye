@@ -903,13 +903,23 @@ def coordinator_tick() -> None:
         and miss the less-popular keywords. Off until verified by
         tests/test_batch_polling_live.py.
 
-    Adaptive backoff: when FB rate-limited us recently, skip the tick.
-    Cooldown is exponential and starts from the most recent rate-limit
-    event — see _compute_cooldown_remaining_s.
+    Three-stage gate before we actually poll:
+      1. Cooldown gate (_should_skip_tick_for_backoff): if recent
+         rate-limits put us in exponential cooldown, skip this tick.
+      2. Slow-start gate (_slow_start_should_skip): if SLOW_START_MODE
+         is on and we polled too recently, skip.
+      3. Half-open probe gate (_circuit_breaker_should_skip): if we
+         were rate-limited recently but cooldown cleared, do a cheap
+         HTML probe BEFORE committing to a real GraphQL search. If the
+         probe is blocked or FB is down, skip and re-arm cooldown via
+         a synthetic rate-limit event so we don't burn search quota
+         confirming we're still flagged.
     """
     if _should_skip_tick_for_backoff():
         return
     if _slow_start_should_skip():
+        return
+    if _circuit_breaker_should_skip():
         return
 
     if os.environ.get("BATCH_POLL_MODE", "off").lower() == "on":
@@ -942,15 +952,24 @@ def _compute_cooldown_remaining_s() -> int:
     Strategy:
       - count fb_rate_limit events in the last RATE_LIMIT_WINDOW_S
       - cooldown = base * 2^(min(n-1, 4)), capped at MAX
+      - apply decorrelated jitter (uniform 0.85x-1.15x of nominal) so
+        repeated retries don't fire at synchronized wall-clock offsets
+        and so any external rate-limit observer can't fingerprint our
+        retry cadence
       - clock starts at the MOST RECENT rate-limit timestamp
       - remaining = (most_recent + cooldown) - now
+
+    The jitter is *deterministic per rate-limit timestamp* so the
+    countdown timer the dashboard shows doesn't oscillate every time
+    the dashboard polls. We seed random with the timestamp.
     """
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""SELECT COUNT(*),
-                              EXTRACT(EPOCH FROM (NOW() - MAX(created_at)))
+                              EXTRACT(EPOCH FROM (NOW() - MAX(created_at))),
+                              EXTRACT(EPOCH FROM MAX(created_at))
                        FROM scheduler_events
                        WHERE event_type = 'fb_rate_limit'
                          AND created_at >= NOW() - INTERVAL '{RATE_LIMIT_WINDOW_S} seconds'""",
@@ -959,17 +978,114 @@ def _compute_cooldown_remaining_s() -> int:
     except Exception:  # noqa: BLE001
         return 0  # fail open — better to poll than to get stuck
 
-    n, secs_since_last = row[0], row[1]
+    n, secs_since_last, last_epoch = row[0], row[1], row[2]
     if not n or secs_since_last is None:
         return 0
 
-    # Exponential cooldown: 60s, 120s, 240s, 480s, 600s
-    cooldown = min(
+    # Exponential cooldown: 60s, 120s, 240s, 480s, 600s (nominal).
+    nominal = min(
         RATE_LIMIT_BASE_COOLDOWN_S * (2 ** min(int(n) - 1, 4)),
         RATE_LIMIT_MAX_COOLDOWN_S,
     )
-    remaining = cooldown - float(secs_since_last)
+    # Decorrelated jitter, deterministic per (n, last_epoch) so the
+    # countdown is stable across dashboard refreshes within the same
+    # cooldown period.
+    import random as _r
+    jitter_seed = int((last_epoch or 0) * 1000) ^ int(n) << 8
+    rng = _r.Random(jitter_seed)
+    jittered = nominal * rng.uniform(0.85, 1.15)
+    remaining = jittered - float(secs_since_last)
     return max(0, int(remaining))
+
+
+def _circuit_breaker_should_skip() -> bool:
+    """Half-open probe gate. If we have RECENT rate-limits and the
+    cooldown JUST cleared (we're about to retry for the first time
+    since being blocked), do a cheap HTML probe FIRST to test the
+    waters. If the probe says we're still blocked, skip the tick and
+    record a synthetic rate-limit event so the next cooldown is
+    longer (we don't burn a search request to learn the same thing).
+
+    Closed → Open → Half-Open → Closed semantics:
+      * Closed     = no recent rate-limits, normal polling
+      * Open       = inside cooldown window (handled by
+                     _should_skip_tick_for_backoff)
+      * Half-Open  = cooldown just cleared. Probe instead of polling.
+                     Probe success → closed (proceed to actual poll).
+                     Probe blocked → re-open with longer cooldown.
+                     Probe says down → skip this tick, retry next.
+
+    The 'recent rate-limits' check uses a SHORTER window than the
+    cooldown's 30-min window so we don't probe every tick once the
+    rate-limits roll off — once we have a clean run we trust the
+    closed state.
+    """
+    HALF_OPEN_LOOKBACK_S = 600  # only probe if rate-limited in last 10 min
+    PROBE_COOLDOWN_S = 90       # don't re-probe within 90s of last probe
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # How recent is the last rate-limit?
+                cur.execute(
+                    f"""SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at)))
+                        FROM scheduler_events
+                        WHERE event_type = 'fb_rate_limit'
+                          AND created_at >= NOW() - INTERVAL '{HALF_OPEN_LOOKBACK_S} seconds'""",
+                )
+                row = cur.fetchone()
+                secs_since_last_rl = row[0] if row else None
+
+                # Did we already probe recently? Don't probe more than
+                # once per PROBE_COOLDOWN_S — wasteful and looks bot-y.
+                cur.execute(
+                    f"""SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at))),
+                              detail->>'result'
+                        FROM scheduler_events
+                        WHERE event_type = 'fb_probe'
+                          AND created_at >= NOW() - INTERVAL '{PROBE_COOLDOWN_S} seconds'""",
+                )
+                row = cur.fetchone()
+                secs_since_probe, last_probe_result = (row or (None, None))
+    except Exception:  # noqa: BLE001
+        return False  # fail open
+
+    # No recent rate-limits → closed state, proceed normally.
+    if secs_since_last_rl is None:
+        return False
+
+    # If we have a recent probe result, trust it briefly.
+    if secs_since_probe is not None:
+        if last_probe_result == "ok":
+            return False  # probe just said we're back, proceed
+        # Probe said blocked / down recently — skip without re-probing.
+        return True
+
+    # Half-open: cooldown cleared but we're still in the lookback
+    # window. Probe before committing to a real search.
+    try:
+        result = get_search_client().probe_marketplace_root()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("probe raised (treating as 'down'): %s", e)
+        result = "down"
+
+    record_event("fb_probe", result=result)
+    logger.info("fb-probe (half-open) → %s", result)
+
+    if result == "ok":
+        return False  # transition to closed; let the actual poll happen
+    if result == "blocked":
+        # Synthesize a rate-limit event so the cooldown extends. This
+        # is the "open with reset timer" half of the circuit breaker.
+        record_event(
+            "fb_rate_limit",
+            code=1675004,
+            message="probe-detected block (no quota burned)",
+            severity="probe",
+        )
+        return True
+    # 'down' → don't re-open; FB looks unhealthy, just skip this tick.
+    return True
 
 
 def _should_skip_tick_for_backoff() -> bool:

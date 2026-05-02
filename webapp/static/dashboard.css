@@ -74,6 +74,24 @@
     letter-spacing: 0.18em;
     color: var(--fg);
 }
+
+.fb-health-badge {
+    margin-left: 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
+    color: var(--fg-muted);
+    cursor: help;
+}
+.fb-health-badge[data-health="ok"]      { color: var(--good); border-color: rgba(93,107,58,0.5); background: rgba(93,107,58,0.08); }
+.fb-health-badge[data-health="blocked"] { color: var(--bad);  border-color: rgba(154,42,42,0.5); background: rgba(154,42,42,0.10); }
+.fb-health-badge[data-health="fb_down"] { color: var(--warn); border-color: rgba(184,121,31,0.5); background: rgba(184,121,31,0.10); }
 .poll-timer-detail {
     font-family: var(--font-mono);
     font-size: 10px;
@@ -116,7 +134,9 @@
     height: 100%;
     width: 0;
     background: var(--fg-muted);
-    transition: width 800ms var(--ease);
+    /* Linear 1s matches the JS 1Hz tick so the shrink looks smooth and
+       doesn't lag behind the displayed countdown. */
+    transition: width 1000ms linear;
 }
 
 /* State-specific colors */

@@ -128,14 +128,32 @@
         detail.textContent = detailText;
         countdown.textContent = formatCountdown(remaining);
 
-        // Progress bar — fills from 0% to 100% as we approach next attempt.
-        // For cooldown we know the total; for slow_start we use min_interval;
-        // for tick state we use coordinator_tick_s. Visual feedback only.
+        // FB-health badge — distinguishes "we're blocked" from "FB is
+        // down" from "all good" so the user knows what's wrong even
+        // before reading the state line.
+        const badge = document.getElementById("fb-health-badge");
+        const h = t.fb_health || "unknown";
+        badge.dataset.health = h;
+        badge.textContent =
+            h === "ok"       ? "FB OK" :
+            h === "blocked"  ? "WE'RE FLAGGED" :
+            h === "fb_down"  ? "FB DOWN" :
+                               "FB ?";
+        badge.title =
+            h === "ok"       ? "Health probe says FB is up and our session is unblocked." :
+            h === "blocked"  ? "Health probe says FB is up but our IP/fingerprint is flagged." :
+            h === "fb_down"  ? "Health probe couldn't reach FB; FB itself looks down." :
+                               "No probe has run yet this run.";
+
+        // Progress bar — represents REMAINING time. Starts full and
+        // shrinks toward 0 as we approach the next attempt. (Was
+        // inverted before — bar grew as time passed, which felt
+        // backwards for a countdown.)
         let total;
         if (t.state === "cooldown")        total = (t.cooldown || {}).total_s || 60;
         else if (t.state === "slow_start") total = (t.slow_start || {}).min_interval_s || 60;
         else                               total = t.coordinator_tick_s || 20;
-        const pct = Math.min(100, Math.max(0, ((total - remaining) / total) * 100));
+        const pct = Math.min(100, Math.max(0, (remaining / total) * 100));
         bar.style.width = pct.toFixed(1) + "%";
     }
 

@@ -26,7 +26,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import requests
+# curl_cffi instead of plain `requests` — it impersonates Chrome's
+# TLS/JA3 fingerprint and HTTP/2 frame ordering, which moves us off
+# Python's static fingerprint that's been known to anti-bot databases
+# for years. Drop-in replacement for requests.Session() except we pass
+# `impersonate=...` and import its exceptions namespace explicitly.
+from curl_cffi import requests  # type: ignore[import-untyped]
+from curl_cffi.requests import exceptions as cffi_exc  # type: ignore[import-untyped]
+# Refresh the impersonation target every few months as Chrome ships
+# new versions; curl_cffi ships chrome120/124/131/etc presets.
+_IMPERSONATE_TARGET = "chrome131"
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +169,11 @@ class FacebookSearchClient:
         timeout_s: int = 30,
         headers: dict[str, str] | None = None,
     ):
-        self._session = session or requests.Session()
+        # curl_cffi.requests.Session takes `impersonate` and (via curl)
+        # speaks HTTP/2 with browser-correct frame ordering and TLS
+        # ClientHello permutation. Same .post() / .get() / .close() API
+        # as plain requests.
+        self._session = session or requests.Session(impersonate=_IMPERSONATE_TARGET)
         self._gate = _RateGate(rate_interval_s)
         self._max_retries = max_retries
         self._backoff = backoff_base_s
@@ -172,13 +185,71 @@ class FacebookSearchClient:
     def search(self, params: SearchParams) -> SearchPage:
         """Run one search request and return a parsed SearchPage.
 
-        Raises requests.RequestException on terminal network failure
-        (after all retries exhausted) or json.JSONDecodeError on a
-        body we can't parse.
+        Raises curl_cffi.requests.exceptions.RequestException on
+        terminal network failure (after all retries exhausted) or
+        json.JSONDecodeError on a body we can't parse.
         """
         payload = self._build_payload(params)
         body = self._post_with_retry(payload)
         return self._parse_page(body)
+
+    def probe_marketplace_root(self, *, timeout_s: float = 10.0) -> str:
+        """Cheap health probe for the half-open circuit breaker.
+
+        Hits the public Marketplace HTML root, NOT the GraphQL search
+        endpoint. The HTML root is far less aggressively rate-limited
+        because real users hit it constantly, so it gives us a
+        low-signal way to test "is FB up and willing to respond to
+        my IP/fingerprint?" without burning a full search request.
+
+        Returns one of:
+          'ok'      — 200 response, body looks like Marketplace HTML
+          'blocked' — 403/429 or HTML 200 that contains a known
+                      anti-bot signature
+          'down'    — 5xx, network error, or unparseable response
+
+        Uses the SAME session as search() so it shares cookies, TLS
+        fingerprint, and HTTP/2 connection pool — meaning a 'ok' here
+        tells us our actual session is unblocked, not just "FB
+        responds to anyone."
+        """
+        try:
+            self._gate.wait()
+            resp = self._session.get(
+                "https://www.facebook.com/marketplace/",
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Upgrade-Insecure-Requests": "1",
+                },
+                timeout=timeout_s,
+            )
+        except Exception as e:  # noqa: BLE001 — probe must never crash
+            logger.debug("probe network error: %s", e)
+            return "down"
+
+        if 500 <= resp.status_code < 600:
+            return "down"
+        if resp.status_code in (403, 429):
+            return "blocked"
+        if resp.status_code != 200:
+            return "down"
+
+        # Cheap heuristic: real Marketplace HTML mentions 'marketplace'
+        # somewhere in the body. A logged-out interstitial / block page
+        # typically lacks it, OR contains 'temporarily blocked' /
+        # 'unusual activity'. Body up to ~50 KB is plenty.
+        body = (resp.text or "")[:50_000].lower()
+        if "temporarily blocked" in body or "unusual activity" in body:
+            return "blocked"
+        if "marketplace" in body:
+            return "ok"
+        # Got a 200 but it doesn't look like marketplace — probably a
+        # checkpoint or login wall. Treat as soft block.
+        return "blocked"
 
     # --- internals -------------------------------------------------------
 
@@ -230,7 +301,7 @@ class FacebookSearchClient:
                     data=payload,
                     timeout=self._timeout,
                 )
-            except requests.RequestException as e:
+            except cffi_exc.RequestException as e:
                 last_exc = e
                 logger.warning(
                     "fb-search network error attempt=%d/%d: %s",
@@ -241,7 +312,7 @@ class FacebookSearchClient:
 
             # 5xx: retry. 4xx: surface immediately.
             if 500 <= resp.status_code < 600:
-                last_exc = requests.HTTPError(
+                last_exc = cffi_exc.HTTPError(
                     f"{resp.status_code} from FB GraphQL", response=resp,
                 )
                 logger.warning(

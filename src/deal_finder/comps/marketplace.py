@@ -27,6 +27,7 @@ will prefer eBay over Marketplace when both exist.
 from __future__ import annotations
 
 import logging
+import threading
 
 from ..db.comps import CompObservation, CompStats, fetch_stats, insert_comps
 from ..db.connection import get_conn
@@ -48,6 +49,22 @@ DEFAULT_TTL_SECONDS = 12 * 3600
 # lookup. Each recovery is a detail HTTP fetch + maybe an LLM call —
 # 5 is a reasonable balance between data completeness and latency.
 PLACEHOLDER_RECOVERY_BUDGET = 5
+
+
+# --- Singleflight coalescing ---------------------------------------------
+#
+# Two appraisals for the same normalized title arriving within seconds
+# would each cache-miss, each do a full FB search, and each insert the
+# same comp rows. Coalescing collapses N concurrent cache-miss-fetches
+# for the same (search_term, source, category) into ONE network call;
+# the other N-1 callers block on the leader's result and then read from
+# the shared cache.
+_inflight_lock = threading.Lock()
+_inflight: dict[str, threading.Event] = {}
+
+
+def _coalesce_key(search_term: str, source: str, category_id: str | None) -> str:
+    return f"{source}|{search_term.strip().lower()}|{category_id or ''}"
 
 
 def get_comps(
@@ -95,24 +112,52 @@ def get_comps(
                 )
                 return cached
 
-    # Cache miss — refetch from Marketplace.
-    obs = _fetch_observations(
-        search_term=search_term,
-        lat=lat, lng=lng, radius_km=radius_km,
-        exclude_listing_id=exclude_listing_id,
-        category_id=category_id,
-    )
+    # Cache miss — refetch from Marketplace, coalescing concurrent
+    # callers so we do exactly ONE FB request per (term, source, cat).
+    key = _coalesce_key(search_term, SOURCE, category_id)
+    am_leader = False
+    with _inflight_lock:
+        event = _inflight.get(key)
+        if event is None:
+            event = threading.Event()
+            _inflight[key] = event
+            am_leader = True
+
+    inserted = 0
+    if am_leader:
+        try:
+            obs = _fetch_observations(
+                search_term=search_term,
+                lat=lat, lng=lng, radius_km=radius_km,
+                exclude_listing_id=exclude_listing_id,
+                category_id=category_id,
+            )
+            with get_conn() as conn:
+                with conn:
+                    inserted = insert_comps(conn, search_term, SOURCE, obs)
+        finally:
+            event.set()
+            with _inflight_lock:
+                _inflight.pop(key, None)
+    else:
+        # Wait for the leader to finish its fetch + insert. 120s is
+        # generous; FB searches normally complete in 5-30s.
+        if not event.wait(timeout=120):
+            logger.warning(
+                "comp coalesce timeout waiting for leader on key=%s; "
+                "proceeding to read whatever's in cache",
+                key,
+            )
+        else:
+            logger.debug("comp coalesce hit: rode along on leader for %r", search_term)
 
     with get_conn() as conn:
-        with conn:
-            inserted = insert_comps(conn, search_term, SOURCE, obs)
-        with conn:
-            stats = fetch_stats(
-                conn, search_term, SOURCE,
-                ttl_seconds=ttl_seconds,
-                asking_price=asking_price,
-                target_text=target_text if use_embedding_filter else None,
-            )
+        stats = fetch_stats(
+            conn, search_term, SOURCE,
+            ttl_seconds=ttl_seconds,
+            asking_price=asking_price,
+            target_text=target_text if use_embedding_filter else None,
+        )
 
     logger.info(
         "comp refetch term=%r inserted=%d sample=%d median=%s "
