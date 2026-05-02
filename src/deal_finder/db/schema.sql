@@ -215,3 +215,15 @@ CREATE TABLE IF NOT EXISTS city_geocache (
     longitude   REAL,
     fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ---------------------------------------------------------------------
+-- user_searches.must_include / must_exclude — title/description filters.
+-- A watch keyword is necessarily generic ("electric wheelchair") but FB
+-- search returns false-positive matches like "Barbie electric wheelchair
+-- toy". must_include is a comma-separated list of words AT LEAST ONE of
+-- which must appear in the title/description; must_exclude is a list of
+-- words NONE of which may appear. Both are case-insensitive substrings.
+-- NULL/empty means no filter.
+-- ---------------------------------------------------------------------
+ALTER TABLE user_searches ADD COLUMN IF NOT EXISTS must_include TEXT;
+ALTER TABLE user_searches ADD COLUMN IF NOT EXISTS must_exclude TEXT;

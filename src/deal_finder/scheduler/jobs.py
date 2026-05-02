@@ -105,6 +105,24 @@ def poll_search(search_id: int) -> PollResult:
 
     new_listings = [sl for sl in page.listings if sl.id not in seen]
 
+    # Keyword filter: must_include / must_exclude on listing title.
+    # Run BEFORE distance filter so we don't waste geocode round-trips
+    # on listings we'll drop anyway.
+    keyword_dropped = 0
+    must_inc = _parse_word_list(search.get("must_include"))
+    must_exc = _parse_word_list(search.get("must_exclude"))
+    if new_listings and (must_inc or must_exc):
+        kept_kw: list[SearchListing] = []
+        for sl in new_listings:
+            ok, reason = _passes_keyword_filter(sl.title, must_inc, must_exc)
+            if ok:
+                kept_kw.append(sl)
+            else:
+                keyword_dropped += 1
+                logger.debug("%s dropped (keyword): %s | %s",
+                             sl.id, reason, sl.title[:50])
+        new_listings = kept_kw
+
     # Distance filter: FB's filter_radius_km is unreliable for small
     # values, returning Nanaimo listings on a 5km radius search.
     # Geocode each unique city in the result set once, haversine to the
@@ -150,6 +168,7 @@ def poll_search(search_id: int) -> PollResult:
             keyword=keyword, raw_count=len(page.listings),
             new_count=0, appraised_count=0, rejected_count=0,
             distance_dropped=distance_dropped,
+            keyword_dropped=keyword_dropped,
         )
         return PollResult(
             search_id, keyword, len(page.listings), 0, 0, 0, elapsed_s,
@@ -192,6 +211,7 @@ def poll_search(search_id: int) -> PollResult:
         appraised_count=appraised,
         rejected_count=rejected,
         distance_dropped=distance_dropped,
+        keyword_dropped=keyword_dropped,
     )
     return PollResult(
         search_id, keyword, len(page.listings), len(new_listings),
@@ -204,7 +224,7 @@ def _load_search(search_id: int) -> dict | None:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT keyword, latitude, longitude, radius_km,
-                          price_min, price_max
+                          price_min, price_max, must_include, must_exclude
                    FROM user_searches
                    WHERE id = %s AND active = TRUE""",
                 (search_id,),
@@ -215,7 +235,31 @@ def _load_search(search_id: int) -> dict | None:
     return {
         "keyword": row[0], "latitude": row[1], "longitude": row[2],
         "radius_km": row[3], "price_min": row[4], "price_max": row[5],
+        "must_include": row[6], "must_exclude": row[7],
     }
+
+
+def _parse_word_list(s: str | None) -> list[str]:
+    """Comma-separated -> list of lowercased trimmed tokens. Empty list
+    when input is None/empty/whitespace."""
+    if not s:
+        return []
+    return [w.strip().lower() for w in s.split(",") if w.strip()]
+
+
+def _passes_keyword_filter(
+    title: str, must_include: list[str], must_exclude: list[str],
+) -> tuple[bool, str | None]:
+    """Returns (kept, reason). reason is set when kept=False."""
+    title_l = (title or "").lower()
+    if must_include:
+        if not any(w in title_l for w in must_include):
+            return False, f"missing required: {','.join(must_include)}"
+    if must_exclude:
+        for w in must_exclude:
+            if w in title_l:
+                return False, f"contains banned: {w}"
+    return True, None
 
 
 def _process_new_listing(

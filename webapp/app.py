@@ -601,6 +601,7 @@ def api_watches_list():
                 """SELECT
                        us.id, us.keyword, us.radius_km, us.price_min, us.price_max,
                        us.latitude, us.longitude, us.active, us.created_at,
+                       us.must_include, us.must_exclude,
                        s.email, s.score_threshold, s.daily_summary_enabled,
                        (SELECT COUNT(*) FROM listings l
                           WHERE l.search_id = us.id) AS total_seen,
@@ -626,12 +627,14 @@ def api_watches_list():
                     "longitude": float(r[6]) if r[6] is not None else None,
                     "active": bool(r[7]),
                     "created_at": r[8].isoformat() if r[8] else None,
-                    "email": r[9],
-                    "score_threshold": r[10] if r[10] is not None else None,
-                    "daily_summary_enabled": bool(r[11]) if r[11] is not None else False,
-                    "total_seen": int(r[12] or 0),
-                    "hit_count": int(r[13] or 0),
-                    "last_scrape": r[14].isoformat() if r[14] else None,
+                    "must_include": r[9],
+                    "must_exclude": r[10],
+                    "email": r[11],
+                    "score_threshold": r[12] if r[12] is not None else None,
+                    "daily_summary_enabled": bool(r[13]) if r[13] is not None else False,
+                    "total_seen": int(r[14] or 0),
+                    "hit_count": int(r[15] or 0),
+                    "last_scrape": r[16].isoformat() if r[16] else None,
                 })
     return jsonify({"watches": rows})
 
@@ -686,6 +689,12 @@ def api_watches_patch(watch_id: int):
             us_updates["price_min"] = _opt_int("price_min")
         if "price_max" in data:
             us_updates["price_max"] = _opt_int("price_max")
+        if "must_include" in data:
+            v = (data.get("must_include") or "").strip()
+            us_updates["must_include"] = v if v else None
+        if "must_exclude" in data:
+            v = (data.get("must_exclude") or "").strip()
+            us_updates["must_exclude"] = v if v else None
         if "score_threshold" in data:
             t = _opt_int("score_threshold")
             if t is None or not (0 <= t <= 100):
