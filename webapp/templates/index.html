@@ -128,30 +128,30 @@
                     <strong class="home-loc-label">— set your home location —</strong>
                     <button class="home-loc-edit" type="button">edit</button>
                 </div>
-                <form id="home-form" class="home-loc-form" hidden>
-                    <div class="field">
-                        <label for="home-label">Location label</label>
-                        <input type="text" id="home-label" name="home_label"
-                               placeholder="Vancouver, BC">
+                <form id="home-form" class="home-loc-form" hidden autocomplete="off">
+                    <div class="field geo-field">
+                        <label for="home-search">Your location</label>
+                        <input type="text" id="home-search" name="q"
+                               placeholder="Vancouver, BC · 1234 main st · UBC"
+                               autocomplete="off"
+                               aria-autocomplete="list"
+                               aria-controls="geo-suggestions">
+                        <div class="geo-suggestions" id="geo-suggestions" hidden></div>
                     </div>
-                    <div class="filter-grid">
-                        <div class="field">
-                            <label for="home-lat">Latitude</label>
-                            <input type="text" id="home-lat" name="home_latitude"
-                                   placeholder="49.2827" required>
-                        </div>
-                        <div class="field">
-                            <label for="home-lng">Longitude</label>
-                            <input type="text" id="home-lng" name="home_longitude"
-                                   placeholder="-123.1207" required>
-                        </div>
+                    <!-- Hidden fields populated by autocomplete selection -->
+                    <input type="hidden" id="home-label" name="home_label">
+                    <input type="hidden" id="home-lat" name="home_latitude">
+                    <input type="hidden" id="home-lng" name="home_longitude">
+                    <div class="home-loc-selected" hidden>
+                        <span class="muted">selected:</span>
+                        <strong class="home-loc-selected-label"></strong>
                     </div>
                     <div class="home-loc-actions">
-                        <button type="submit" class="btn btn-accent">Save location</button>
+                        <button type="submit" class="btn btn-accent" disabled>Save location</button>
                         <button type="button" class="btn btn-ghost home-loc-cancel">Cancel</button>
                     </div>
-                    <div class="muted" style="font-size:11px;margin-top:6px;">
-                        tip: open Google Maps, right-click your home, copy the lat/lng.
+                    <div class="muted" style="font-size:10px;margin-top:4px;letter-spacing:0.06em;">
+                        powered by openstreetmap · type any address, city, or place
                     </div>
                 </form>
             </div>

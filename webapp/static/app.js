@@ -611,7 +611,13 @@
         });
     }
 
-    // --- Home location strip ------------------------------------------
+    // --- Home location strip with address autocomplete ---------------
+    //
+    // UX: user types into a single field, we debounce 250ms, hit our
+    // /api/geocode endpoint (which proxies Nominatim), render a
+    // suggestion dropdown, and on click we populate the hidden lat/lng
+    // fields. Save button is disabled until a suggestion is chosen so
+    // we can't submit free-text without a coordinate.
 
     async function setupHomeLocation() {
         const wrap = document.getElementById("home-location");
@@ -624,6 +630,55 @@
         const fLabel = form.querySelector("#home-label");
         const fLat = form.querySelector("#home-lat");
         const fLng = form.querySelector("#home-lng");
+        const search = form.querySelector("#home-search");
+        const suggBox = form.querySelector("#geo-suggestions");
+        const selectedRow = form.querySelector(".home-loc-selected");
+        const selectedLbl = form.querySelector(".home-loc-selected-label");
+        const submitBtn = form.querySelector('button[type="submit"]');
+
+        let debounceTimer = null;
+        let lastQuery = "";
+        let activeReq = 0;
+
+        function clearSelection() {
+            fLabel.value = "";
+            fLat.value = "";
+            fLng.value = "";
+            selectedRow.hidden = true;
+            selectedLbl.textContent = "";
+            submitBtn.disabled = true;
+        }
+
+        function setSelection(item) {
+            fLabel.value = item.label;
+            fLat.value = item.lat;
+            fLng.value = item.lng;
+            selectedLbl.textContent = item.label;
+            selectedRow.hidden = false;
+            submitBtn.disabled = false;
+            suggBox.hidden = true;
+            suggBox.innerHTML = "";
+        }
+
+        function renderSuggestions(items) {
+            suggBox.innerHTML = "";
+            if (!items || items.length === 0) {
+                suggBox.hidden = true;
+                return;
+            }
+            items.forEach((item) => {
+                const row = document.createElement("button");
+                row.type = "button";
+                row.className = "geo-sugg";
+                row.textContent = item.label;
+                row.addEventListener("click", () => {
+                    search.value = item.label;
+                    setSelection(item);
+                });
+                suggBox.appendChild(row);
+            });
+            suggBox.hidden = false;
+        }
 
         async function load() {
             try {
@@ -637,32 +692,87 @@
                     fLabel.value = data.home_label || "";
                     fLat.value = data.home_latitude ?? "";
                     fLng.value = data.home_longitude ?? "";
+                    if (data.home_label) {
+                        search.value = data.home_label;
+                        selectedLbl.textContent = data.home_label;
+                        selectedRow.hidden = false;
+                        submitBtn.disabled = false;
+                    }
                 }
             } catch (e) { /* leave default */ }
         }
 
+        async function fetchSuggestions(q) {
+            const reqId = ++activeReq;
+            try {
+                const res = await fetch("/api/geocode?q=" + encodeURIComponent(q));
+                const data = await res.json();
+                // Drop stale responses (user kept typing)
+                if (reqId !== activeReq) return;
+                renderSuggestions(data.results || []);
+            } catch (err) {
+                if (reqId !== activeReq) return;
+                suggBox.hidden = true;
+            }
+        }
+
+        search.addEventListener("input", () => {
+            const q = search.value.trim();
+            // Typing invalidates any prior selection
+            clearSelection();
+            if (debounceTimer) clearTimeout(debounceTimer);
+            if (q.length < 3) {
+                suggBox.hidden = true;
+                return;
+            }
+            if (q === lastQuery) return;
+            lastQuery = q;
+            debounceTimer = setTimeout(() => fetchSuggestions(q), 250);
+        });
+
+        // Hide dropdown when clicking outside
+        document.addEventListener("click", (ev) => {
+            if (!form.contains(ev.target)) suggBox.hidden = true;
+        });
+
+        // Esc closes the dropdown without closing the form
+        search.addEventListener("keydown", (ev) => {
+            if (ev.key === "Escape") {
+                ev.stopPropagation();
+                suggBox.hidden = true;
+            }
+        });
+
         editBtn.addEventListener("click", () => {
             form.hidden = false;
             display.hidden = true;
+            search.focus();
         });
 
         cancelBtn.addEventListener("click", () => {
             form.hidden = true;
             display.hidden = false;
+            suggBox.hidden = true;
         });
 
         form.addEventListener("submit", async (ev) => {
             ev.preventDefault();
-            const fd = new FormData(form);
+            // Build a clean payload from hidden fields (the visible
+            // search input is just a UX helper — we don't send it).
+            const payload = new FormData();
+            payload.append("home_label", fLabel.value);
+            payload.append("home_latitude", fLat.value);
+            payload.append("home_longitude", fLng.value);
             try {
                 const res = await fetch("/api/settings", {
                     method: "POST",
-                    body: fd,
+                    body: payload,
                 });
                 const data = await res.json();
                 if (data.ok) {
                     form.hidden = true;
                     display.hidden = false;
+                    suggBox.hidden = true;
                     load();
                 } else {
                     alert("Couldn't save: " + (data.error || "unknown"));

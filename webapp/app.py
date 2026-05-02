@@ -369,6 +369,77 @@ def _resolve_home_location() -> tuple[float, float]:
     return 49.2827, -123.1207
 
 
+# In-memory cache for geocoding queries. Nominatim is rate-limited
+# (1 req/sec); caching repeated keystrokes saves their server and ours.
+_GEOCODE_CACHE: dict[str, list[dict]] = {}
+_GEOCODE_CACHE_MAX = 500
+
+
+@app.route("/api/geocode", methods=["GET"])
+def api_geocode():
+    """Forward an address-autocomplete query to Nominatim (OpenStreetMap)
+    and return a small JSON list of suggestions.
+
+    Query: ?q=<free-text address or place name>
+    Response: { results: [ { label, lat, lng }, ... ] }
+
+    Why a server-side proxy rather than calling Nominatim from the
+    browser? Nominatim's usage policy requires a real User-Agent
+    identifying the app — browsers can't set that header on cross-origin
+    requests. Routing through Flask also lets us cache and lightly
+    rate-limit requests so we don't get banned.
+    """
+    import requests  # local import keeps cold start lean
+
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 3:
+        return jsonify({"results": []})
+
+    if q in _GEOCODE_CACHE:
+        return jsonify({"results": _GEOCODE_CACHE[q]})
+
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": q,
+                "format": "json",
+                "limit": 6,
+                "addressdetails": 0,
+            },
+            headers={
+                # Nominatim policy: identify the app + a contact route
+                "User-Agent": "bullseye-deal-finder/0.1 (github.com/reubenlavin08/bullseye)",
+                "Accept-Language": "en",
+            },
+            timeout=4.0,
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+    except requests.RequestException as e:
+        return jsonify({"results": [], "error": f"geocoder unreachable: {e}"}), 502
+
+    results = []
+    for item in raw[:6]:
+        try:
+            results.append({
+                "label": item.get("display_name") or "",
+                "lat": float(item["lat"]),
+                "lng": float(item["lon"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    # Cache + bound the cache size (LRU-ish — drop oldest by insertion order)
+    _GEOCODE_CACHE[q] = results
+    if len(_GEOCODE_CACHE) > _GEOCODE_CACHE_MAX:
+        # Pop the oldest 50 to amortize
+        for k in list(_GEOCODE_CACHE.keys())[:50]:
+            _GEOCODE_CACHE.pop(k, None)
+
+    return jsonify({"results": results})
+
+
 @app.route("/api/searches/bulk", methods=["POST"])
 def api_searches_bulk():
     """Create many saved searches at once.
