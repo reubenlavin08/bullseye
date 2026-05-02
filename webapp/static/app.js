@@ -438,6 +438,33 @@
         });
     }
 
+    function renderSuccessBanner(banner, data) {
+        const created = data.created || [];
+        const dup = data.duplicate || [];
+        const conf = data.confirmation;
+        const total = created.length + dup.length;
+
+        let confLine = "";
+        if (conf && conf.ok) {
+            confLine = `<div class="banner-line">✉ confirmation email sent (via <code>${conf.backend}</code>)</div>`;
+        } else if (conf && !conf.ok) {
+            confLine = `<div class="banner-line muted">no confirmation email — backend <code>${conf.backend || "?"}</code>: ${escapeHtml(conf.message || "")}</div>`;
+        }
+
+        const newLine = created.length
+            ? `<div class="banner-line">+ NEW: ${created.map(c => escapeHtml(c.keyword)).join(", ")}</div>`
+            : "";
+        const dupLine = dup.length
+            ? `<div class="banner-line muted">↻ re-activated: ${dup.map(c => escapeHtml(c.keyword)).join(", ")}</div>`
+            : "";
+
+        banner.innerHTML =
+            `<div class="banner-stamp">order ticket · confirmed</div>` +
+            `<h3 class="banner-headline">Thanks — you're on watch.</h3>` +
+            `<div class="banner-summary">${total} watch${total === 1 ? "" : "es"} now active.</div>` +
+            newLine + dupLine + confLine;
+    }
+
     async function setupBulkForm() {
         const form = document.getElementById("bulk-form");
         if (!form) return;
@@ -455,26 +482,17 @@
                 });
                 const data = await res.json();
                 if (data.ok) {
-                    let lines = [data.summary || "Saved."];
-                    if (data.created && data.created.length) {
-                        lines.push("New: " + data.created.map(c => c.keyword).join(", "));
-                    }
-                    if (data.duplicate && data.duplicate.length) {
-                        lines.push("Already saved (re-activated): " +
-                            data.duplicate.map(c => c.keyword).join(", "));
-                    }
-                    banner.textContent = lines.join(" · ");
+                    renderSuccessBanner(banner, data);
                     banner.hidden = false;
                     form.reset();
-                    // Refresh subscribe dropdown so new searches appear
                     setupSubscribeForm();
                 } else {
-                    banner.textContent = "Couldn't save: " + (data.error || "unknown error");
+                    banner.innerHTML = "<strong>Couldn't save:</strong> " + escapeHtml(data.error || "unknown error");
                     banner.classList.add("is-error");
                     banner.hidden = false;
                 }
             } catch (err) {
-                banner.textContent = "Network error: " + err.message;
+                banner.innerHTML = "<strong>Network error:</strong> " + escapeHtml(err.message);
                 banner.classList.add("is-error");
                 banner.hidden = false;
             }
@@ -590,21 +608,17 @@
                 });
                 const data = await res.json();
                 if (data.ok) {
-                    let lines = [data.summary || "Saved."];
-                    if (data.duplicate && data.duplicate.length) {
-                        lines.push("(this watch already existed — re-activated)");
-                    }
-                    banner.textContent = lines.join(" · ");
+                    renderSuccessBanner(banner, data);
                     banner.hidden = false;
                     form.reset();
                     setupSubscribeForm();
                 } else {
-                    banner.textContent = "Couldn't save: " + (data.error || "unknown");
+                    banner.innerHTML = "<strong>Couldn't save:</strong> " + escapeHtml(data.error || "unknown");
                     banner.classList.add("is-error");
                     banner.hidden = false;
                 }
             } catch (err) {
-                banner.textContent = "Network error: " + err.message;
+                banner.innerHTML = "<strong>Network error:</strong> " + escapeHtml(err.message);
                 banner.classList.add("is-error");
                 banner.hidden = false;
             }
@@ -785,6 +799,22 @@
         await load();
     }
 
+    // After /search renders results, jump the user past the hero
+    // straight to the listings grid. The form is a full POST so the
+    // page reloads with #listings present in the DOM whenever there
+    // are results — that's the trigger.
+    function setupSearchScroll() {
+        const listings = document.getElementById("listings");
+        if (!listings) return;
+        // Smooth scroll once layout settles. requestAnimationFrame
+        // double-tap so the in-view animation observer attaches first.
+        requestAnimationFrame(() =>
+            requestAnimationFrame(() =>
+                listings.scrollIntoView({ behavior: "smooth", block: "start" })
+            )
+        );
+    }
+
     function bootAll() {
         init();
         setupReveal();
@@ -794,6 +824,7 @@
         setupSingleForm();
         setupBulkForm();
         setupSubscribeForm();
+        setupSearchScroll();
     }
 
     if (document.readyState === "loading") {

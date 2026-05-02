@@ -44,7 +44,10 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = int(os.environ.get("POLL_INTERVAL_S", "60"))
 SAFETY_NET_INTERVAL_S = int(os.environ.get("SAFETY_NET_INTERVAL_S", "600"))
-RELOAD_INTERVAL_S = int(os.environ.get("RELOAD_INTERVAL_S", "300"))
+# Reload tick — how fast newly-saved searches get picked up. Was 300s
+# (5 min) which felt sluggish. 20s gives near-instant pickup without
+# hammering the DB.
+RELOAD_INTERVAL_S = int(os.environ.get("RELOAD_INTERVAL_S", "20"))
 DIGEST_INTERVAL_S = int(os.environ.get("DIGEST_INTERVAL_S", "15"))
 DAILY_SUMMARY_INTERVAL_S = int(os.environ.get("DAILY_SUMMARY_INTERVAL_S", "3600"))
 WARMUP_LLM_ON_BOOT = os.environ.get("WARMUP_LLM_ON_BOOT", "1") not in ("0", "")
@@ -76,9 +79,11 @@ def reload_searches(scheduler: BlockingScheduler) -> None:
         jid = _job_id(sid)
         if jid in current:
             continue
-        # Spread initial firings so we don't burst N searches at the
-        # same instant on boot. Uses the search's id as the offset.
-        first_run_offset = (sid * 7) % POLL_INTERVAL_S
+        # First run: a tiny stagger so adding 20 searches doesn't
+        # fire 20 scrapes at the same instant. Capped at 12s, so a
+        # newly-saved watch starts polling within seconds — not a
+        # full POLL_INTERVAL_S delay.
+        first_run_offset = min((sid * 3) % 12, 12)
         scheduler.add_job(
             poll_search,
             args=[sid],

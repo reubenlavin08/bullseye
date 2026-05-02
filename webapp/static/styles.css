@@ -1376,22 +1376,81 @@ em, .italic {
     flex-wrap: wrap;
 }
 
-/* ---------- Subscribe banner ---------- */
+/* ---------- Subscribe banner (receipt style) ---------- */
 
 .subscribe-banner {
-    margin-top: 16px;
-    padding: 12px 14px;
+    margin-top: 18px;
+    padding: 18px 18px 16px;
     border-radius: var(--radius-sm);
-    background: rgba(93, 107, 58, 0.10);
-    border: 1px dashed rgba(93, 107, 58, 0.4);
-    color: var(--good);
+    background: rgba(93, 107, 58, 0.08);
+    border: 1px dashed rgba(93, 107, 58, 0.50);
+    color: var(--fg);
     font-size: 12px;
     font-family: var(--font-mono);
+    line-height: 1.6;
+    position: relative;
 }
 .subscribe-banner.is-error {
     background: rgba(154, 42, 42, 0.08);
     border-color: rgba(154, 42, 42, 0.4);
     color: var(--bad);
+}
+
+.subscribe-banner .banner-stamp {
+    display: inline-block;
+    border: 1px dashed rgba(63, 23, 24, 0.4);
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    margin-bottom: 10px;
+}
+
+.subscribe-banner .banner-headline {
+    margin: 0 0 4px;
+    font-family: var(--font-italic);
+    font-style: italic;
+    font-size: 22px;
+    font-weight: 500;
+    color: var(--fg);
+    letter-spacing: -0.01em;
+    text-transform: none;
+    line-height: 1.1;
+}
+
+.subscribe-banner .banner-summary {
+    color: var(--good);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.subscribe-banner.is-error .banner-summary {
+    color: var(--bad);
+}
+
+.subscribe-banner .banner-line {
+    font-size: 11px;
+    color: var(--fg-muted);
+    padding: 3px 0;
+    border-top: 1px dashed rgba(63, 23, 24, 0.18);
+    margin-top: 6px;
+    letter-spacing: 0.02em;
+}
+
+.subscribe-banner .banner-line:first-of-type { margin-top: 8px; }
+.subscribe-banner .banner-line code {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
 }
 
 /* ---------- Condition chips ---------- */

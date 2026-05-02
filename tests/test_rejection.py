@@ -507,6 +507,46 @@ def test_legit_listing_with_month_in_use_history_not_rejected():
     assert r.rejected is False
 
 
+def test_trade_in_with_dash():
+    rejection.reset_cache()
+    r = evaluate(
+        title="2018 Honda Civic",
+        description="Trade-ins welcome on any vehicle.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_trade_in_with_space():
+    rejection.reset_cache()
+    r = evaluate(
+        title="iPhone 14 Pro",
+        description="Open to trade ins. Cash preferred.",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_trade_in_accepting():
+    rejection.reset_cache()
+    r = evaluate(
+        title="MacBook Air",
+        description="Accepting trade-ins of newer Apple laptops",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
+def test_trade_in_open_to():
+    rejection.reset_cache()
+    r = evaluate(
+        title="Yamaha keyboard",
+        description="Open to trade in on a guitar",
+        config_dir=_real_config_dir(),
+    )
+    assert r.rejected is True
+
+
 def test_legit_listing_mentioning_lease_in_history_not_rejected():
     """'Lease ended' as historical context shouldn't reject a sale."""
     rejection.reset_cache()

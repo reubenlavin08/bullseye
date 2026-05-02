@@ -3,6 +3,10 @@
 
 # Trade / wanted posts (not selling, asking)
 \btrades?\b
+\btrade[\s-]?ins?\b
+\btrade[\s-]?in\s+(welcome|ok|okay|considered|accepted|available|possible|possibility)\b
+\bopen\s+to\s+trade[\s-]?ins?\b
+\b(accept|accepting|taking|consider(ing)?)\s+trade[\s-]?ins?\b
 \bswap\b
 \bISO\b
 \blooking for\b
