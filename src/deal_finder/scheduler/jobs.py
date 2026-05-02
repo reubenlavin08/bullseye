@@ -284,12 +284,26 @@ def drain_appraisal_safety_net() -> None:
 
 def send_digest_emails() -> None:
     """Build and send one digest email per subscriber for any
-    not-yet-notified, score-passing listings. See alerts/digest.py."""
+    not-yet-notified, score-passing listings. Runs frequently (every
+    15-60s) so this is effectively the 'instant alert' worker."""
     from ..alerts.digest import send_pending_digests
     stats = send_pending_digests()
     if stats["sent"] > 0 or stats["failed"] > 0:
         logger.info(
-            "digest tick: sent=%d failed=%d total_listings=%d",
+            "instant alert tick: sent=%d failed=%d total_listings=%d",
+            stats["sent"], stats["failed"], stats["total_listings"],
+        )
+
+
+def send_daily_summary_emails() -> None:
+    """Daily roundup: scored-but-below-threshold listings from the past
+    24h. Runs hourly; only fires for subscribers whose last_summary was
+    23+ hours ago."""
+    from ..alerts.digest import send_daily_summaries
+    stats = send_daily_summaries()
+    if stats["sent"] > 0 or stats["failed"] > 0:
+        logger.info(
+            "daily summary tick: sent=%d failed=%d total_listings=%d",
             stats["sent"], stats["failed"], stats["total_listings"],
         )
 

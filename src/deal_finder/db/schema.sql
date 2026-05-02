@@ -119,19 +119,44 @@ CREATE TABLE IF NOT EXISTS comps_meta (
 
 -- ---------------------------------------------------------------------
 -- subscribers — people who want to be notified about high-score deals
---   for a given saved search. Email is required; phone is optional
---   (could carry SMS later). One row per (email, search_id).
+--   for a given saved search. Email is required; phone is optional.
+--   Each row = (email, search_id). The same email can subscribe to many
+--   searches; the digest worker groups all matches per email into one.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS subscribers (
-    id                  SERIAL PRIMARY KEY,
-    name                TEXT,
-    email               TEXT NOT NULL,
-    phone               TEXT,
-    search_id           INTEGER REFERENCES user_searches(id) ON DELETE CASCADE,
-    score_threshold     INTEGER NOT NULL DEFAULT 70,
-    confirmed           BOOLEAN NOT NULL DEFAULT FALSE,  -- email-verify hook for later
-    active              BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    id                       SERIAL PRIMARY KEY,
+    name                     TEXT,
+    email                    TEXT NOT NULL,
+    phone                    TEXT,
+    search_id                INTEGER REFERENCES user_searches(id) ON DELETE CASCADE,
+    score_threshold          INTEGER NOT NULL DEFAULT 70,
+    daily_summary_enabled    BOOLEAN NOT NULL DEFAULT TRUE,   -- send 24h-rolling summary of below-threshold scored listings
+    last_summary_sent_at     TIMESTAMPTZ,                     -- when we last sent the summary
+    confirmed                BOOLEAN NOT NULL DEFAULT FALSE,  -- email-verify hook for later
+    active                   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (email, search_id)
 );
 CREATE INDEX IF NOT EXISTS idx_subscribers_search ON subscribers(search_id);
+
+-- ---------------------------------------------------------------------
+-- user_settings — per-user prefs. For a single-user system this is
+-- effectively one row, but the user_id column lets us add multi-user
+-- later without schema change. Currently holds the home location used
+-- as the default centre for new saved searches.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_settings (
+    id              SERIAL PRIMARY KEY,
+    user_id         INTEGER NOT NULL DEFAULT 1,
+    home_label      TEXT,                     -- e.g. "Vancouver, BC"
+    home_latitude   REAL,
+    home_longitude  REAL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id)
+);
+
+-- ---------------------------------------------------------------------
+-- listings.summarized_at — set by the daily-summary job when a listing
+-- is included in a 24h roundup so we don't re-include it tomorrow.
+-- ---------------------------------------------------------------------
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS summarized_at TIMESTAMPTZ;

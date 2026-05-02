@@ -286,6 +286,89 @@ def api_searches():
     return jsonify({"searches": rows})
 
 
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    """Read or upsert the single-user home location.
+
+    GET  -> { home_label, home_latitude, home_longitude, updated_at }
+            (any field may be null if never set)
+
+    POST -> form-encoded or JSON with the same fields. Upserts the row
+            for user_id=1.
+    """
+    if request.method == "GET":
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT home_label, home_latitude, home_longitude, updated_at
+                       FROM user_settings WHERE user_id = 1""",
+                )
+                row = cur.fetchone()
+        if not row:
+            return jsonify({
+                "home_label": None,
+                "home_latitude": None,
+                "home_longitude": None,
+                "updated_at": None,
+            })
+        return jsonify({
+            "home_label": row[0],
+            "home_latitude": float(row[1]) if row[1] is not None else None,
+            "home_longitude": float(row[2]) if row[2] is not None else None,
+            "updated_at": row[3].isoformat() if row[3] else None,
+        })
+
+    # POST
+    data = request.form if request.form else (request.get_json(silent=True) or {})
+    label = (data.get("home_label") or "").strip() or None
+    try:
+        lat = float(data.get("home_latitude")) if data.get("home_latitude") not in (None, "") else None
+        lng = float(data.get("home_longitude")) if data.get("home_longitude") not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "lat/lng must be numbers"}), 400
+    if lat is None or lng is None:
+        return jsonify({"ok": False, "error": "home_latitude and home_longitude required"}), 400
+    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+        return jsonify({"ok": False, "error": "lat/lng out of range"}), 400
+
+    with get_conn() as conn:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO user_settings (user_id, home_label, home_latitude, home_longitude)
+                       VALUES (1, %s, %s, %s)
+                       ON CONFLICT (user_id) DO UPDATE SET
+                         home_label = EXCLUDED.home_label,
+                         home_latitude = EXCLUDED.home_latitude,
+                         home_longitude = EXCLUDED.home_longitude,
+                         updated_at = NOW()""",
+                    (label, lat, lng),
+                )
+    return jsonify({
+        "ok": True,
+        "home_label": label,
+        "home_latitude": lat,
+        "home_longitude": lng,
+    })
+
+
+def _resolve_home_location() -> tuple[float, float]:
+    """Get the configured home lat/lng, falling back to Vancouver default
+    if user_settings is empty."""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT home_latitude, home_longitude FROM user_settings WHERE user_id = 1",
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None and row[1] is not None:
+                    return float(row[0]), float(row[1])
+    except Exception:  # noqa: BLE001
+        pass
+    return 49.2827, -123.1207
+
+
 @app.route("/api/searches/bulk", methods=["POST"])
 def api_searches_bulk():
     """Create many saved searches at once.
@@ -324,19 +407,29 @@ def api_searches_bulk():
     if not keywords:
         return jsonify({"ok": False, "error": "no usable keywords"}), 400
 
+    home_lat, home_lng = _resolve_home_location()
     try:
-        lat = float(data.get("lat") or 49.2827)
-        lng = float(data.get("lng") or -123.1207)
+        lat = float(data.get("lat") or home_lat)
+        lng = float(data.get("lng") or home_lng)
         radius_km = int(data.get("radius_km") or 40)
         pmin_str = (str(data.get("price_min") or "")).strip()
         pmax_str = (str(data.get("price_max") or "")).strip()
         price_min = int(pmin_str) if pmin_str else None
         price_max = int(pmax_str) if pmax_str else None
+        # Optional inline subscribe
+        sub_email = (str(data.get("email") or "")).strip()
+        sub_name = (str(data.get("name") or "")).strip() or None
+        sub_threshold = int(data.get("score_threshold") or 70) if str(data.get("score_threshold") or "").strip() else 70
+        sub_threshold = max(0, min(100, sub_threshold))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "bad numeric input"}), 400
 
+    if sub_email and "@" not in sub_email:
+        return jsonify({"ok": False, "error": "invalid email"}), 400
+
     created: list[dict] = []
     duplicate: list[dict] = []
+    subscribed_to: list[int] = []
     with get_conn() as conn:
         with conn:
             with conn.cursor() as cur:
@@ -371,16 +464,40 @@ def api_searches_bulk():
                            RETURNING id""",
                         (kw, lat, lng, radius_km, price_min, price_max),
                     )
-                    created.append({"keyword": kw, "id": cur.fetchone()[0]})
+                    new_id = cur.fetchone()[0]
+                    created.append({"keyword": kw, "id": new_id})
+
+                # Inline subscribe — applies to ALL touched searches.
+                if sub_email:
+                    all_ids = [c["id"] for c in created] + [d["id"] for d in duplicate]
+                    for sid in all_ids:
+                        cur.execute(
+                            """INSERT INTO subscribers
+                               (name, email, search_id, score_threshold, active)
+                               VALUES (%s, %s, %s, %s, TRUE)
+                               ON CONFLICT (email, search_id) DO UPDATE SET
+                                 name = COALESCE(EXCLUDED.name, subscribers.name),
+                                 score_threshold = EXCLUDED.score_threshold,
+                                 active = TRUE""",
+                            (sub_name, sub_email, sid, sub_threshold),
+                        )
+                        subscribed_to.append(sid)
+
+    summary_bits = [f"{len(created)} new search(es) created"]
+    if duplicate:
+        summary_bits.append(f"{len(duplicate)} re-activated")
+    if sub_email and subscribed_to:
+        summary_bits.append(
+            f"alerts to {sub_email} on {len(subscribed_to)} watch(es) "
+            f"@ score ≥ {sub_threshold}"
+        )
 
     return jsonify({
         "ok": True,
         "created": created,
         "duplicate": duplicate,
-        "summary": (
-            f"{len(created)} new search(es) created"
-            + (f", {len(duplicate)} re-activated" if duplicate else "")
-        ),
+        "subscribed_to": subscribed_to,
+        "summary": " · ".join(summary_bits),
     })
 
 

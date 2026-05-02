@@ -35,6 +35,7 @@ from .jobs import (
     drain_appraisal_safety_net,
     list_active_search_ids,
     poll_search,
+    send_daily_summary_emails,
     send_digest_emails,
 )
 
@@ -44,7 +45,8 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_S = int(os.environ.get("POLL_INTERVAL_S", "60"))
 SAFETY_NET_INTERVAL_S = int(os.environ.get("SAFETY_NET_INTERVAL_S", "600"))
 RELOAD_INTERVAL_S = int(os.environ.get("RELOAD_INTERVAL_S", "300"))
-DIGEST_INTERVAL_S = int(os.environ.get("DIGEST_INTERVAL_S", "60"))
+DIGEST_INTERVAL_S = int(os.environ.get("DIGEST_INTERVAL_S", "15"))
+DAILY_SUMMARY_INTERVAL_S = int(os.environ.get("DAILY_SUMMARY_INTERVAL_S", "3600"))
 WARMUP_LLM_ON_BOOT = os.environ.get("WARMUP_LLM_ON_BOOT", "1") not in ("0", "")
 
 
@@ -149,13 +151,29 @@ def run_forever() -> int:
         coalesce=True,
     )
 
-    # Email digest sender — groups all pending matches per recipient.
+    # Instant alert worker — runs every DIGEST_INTERVAL_S (default 15s).
+    # Sends ONE digest per subscriber per tick whenever any of their
+    # watches has a not-yet-notified, above-threshold listing.
+    # Effectively 'instant' from the user's perspective.
     scheduler.add_job(
         send_digest_emails,
         trigger="interval",
         seconds=DIGEST_INTERVAL_S,
-        id="digest_emails",
-        name="send pending digest emails",
+        id="instant_alerts",
+        name="send pending instant-alert emails",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Daily summary — rolling 24h roundup of scored-but-below-threshold
+    # listings. Job ticks hourly; only fires for subscribers whose last
+    # summary was 23+ hours ago.
+    scheduler.add_job(
+        send_daily_summary_emails,
+        trigger="interval",
+        seconds=DAILY_SUMMARY_INTERVAL_S,
+        id="daily_summary",
+        name="send rolling daily-summary emails",
         max_instances=1,
         coalesce=True,
     )

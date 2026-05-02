@@ -87,21 +87,58 @@
         </div>
     </aside>
 
-    <!-- RIGHT PANEL: saved searches (single + bulk + subscribe + price filter) -->
+    <!-- RIGHT PANEL: saved searches + alerts (one combined component) -->
     <aside class="side-panel side-panel-right" id="panel-right" hidden>
         <div class="side-panel-inner">
             <div class="side-panel-head">
-                <div class="section-eyebrow">save · subscribe · get notified</div>
+                <div class="section-eyebrow">save watches · get email alerts</div>
                 <h2>Saved searches.</h2>
                 <button class="side-close" type="button" data-toggle-panel="right" aria-label="Close">×</button>
             </div>
             <p class="side-panel-sub">
-                Tell us what you want. We email you the moment it appears at a great price.
+                One form. Tell us what you want, where you'd drive, your price range, and the
+                email + score threshold for alerts. We poll Marketplace continuously and email
+                you instantly when a listing scores above your threshold.
             </p>
+
+            <!-- Home location strip -->
+            <div class="home-location" id="home-location">
+                <div class="home-loc-display">
+                    <span class="muted">searching from</span>
+                    <strong class="home-loc-label">— set your home location —</strong>
+                    <button class="home-loc-edit" type="button">edit</button>
+                </div>
+                <form id="home-form" class="home-loc-form" hidden>
+                    <div class="field">
+                        <label for="home-label">Location label</label>
+                        <input type="text" id="home-label" name="home_label"
+                               placeholder="Vancouver, BC">
+                    </div>
+                    <div class="filter-grid">
+                        <div class="field">
+                            <label for="home-lat">Latitude</label>
+                            <input type="text" id="home-lat" name="home_latitude"
+                                   placeholder="49.2827" required>
+                        </div>
+                        <div class="field">
+                            <label for="home-lng">Longitude</label>
+                            <input type="text" id="home-lng" name="home_longitude"
+                                   placeholder="-123.1207" required>
+                        </div>
+                    </div>
+                    <div class="home-loc-actions">
+                        <button type="submit" class="btn btn-accent">Save location</button>
+                        <button type="button" class="btn btn-ghost home-loc-cancel">Cancel</button>
+                    </div>
+                    <div class="muted" style="font-size:11px;margin-top:6px;">
+                        tip: open Google Maps, right-click your home, copy the lat/lng.
+                    </div>
+                </form>
+            </div>
 
             <!-- Tabs: single | bulk -->
             <div class="tab-bar" role="tablist">
-                <button class="tab-btn is-active" data-tab="single" role="tab">Single</button>
+                <button class="tab-btn is-active" data-tab="single" role="tab">Single watch</button>
                 <button class="tab-btn" data-tab="bulk" role="tab">List of items</button>
             </div>
 
@@ -110,7 +147,7 @@
                 <form id="single-form" class="search-form">
                     <div class="field">
                         <label for="single-keyword">Keyword</label>
-                        <input type="text" id="single-keyword" name="keyword"
+                        <input type="text" id="single-keyword" name="keywords"
                                placeholder="2018 Honda Civic, MacBook Pro 14 M2, etc." required>
                     </div>
                     <div class="filter-grid">
@@ -130,7 +167,30 @@
                                    min="0" placeholder="—">
                         </div>
                     </div>
-                    <button type="submit" class="btn">Save this watch</button>
+                    <div class="alerts-block">
+                        <div class="alerts-eyebrow">email alerts</div>
+                        <div class="filter-grid">
+                            <div class="field">
+                                <label for="single-name">Name</label>
+                                <input type="text" id="single-name" name="name"
+                                       placeholder="optional">
+                            </div>
+                            <div class="field">
+                                <label for="single-email">Email</label>
+                                <input type="email" id="single-email" name="email"
+                                       placeholder="you@example.com">
+                            </div>
+                            <div class="field">
+                                <label for="single-threshold">Alert at score ≥</label>
+                                <input type="number" id="single-threshold" name="score_threshold"
+                                       value="70" min="0" max="100">
+                            </div>
+                        </div>
+                        <p class="alerts-hint muted">
+                            Leave email blank to save the watch without alerts.
+                        </p>
+                    </div>
+                    <button type="submit" class="btn btn-accent">Save watch + alerts</button>
                 </form>
                 <div id="single-banner" class="subscribe-banner" hidden></div>
             </div>
@@ -165,45 +225,32 @@ multimeter"
                                    min="0" placeholder="—">
                         </div>
                     </div>
-                    <button type="submit" class="btn">Save all watches</button>
+                    <div class="alerts-block">
+                        <div class="alerts-eyebrow">email alerts (apply to ALL watches in this list)</div>
+                        <div class="filter-grid">
+                            <div class="field">
+                                <label for="bulk-name">Name</label>
+                                <input type="text" id="bulk-name" name="name"
+                                       placeholder="optional">
+                            </div>
+                            <div class="field">
+                                <label for="bulk-email">Email</label>
+                                <input type="email" id="bulk-email" name="email"
+                                       placeholder="you@example.com">
+                            </div>
+                            <div class="field">
+                                <label for="bulk-threshold">Alert at score ≥</label>
+                                <input type="number" id="bulk-threshold" name="score_threshold"
+                                       value="70" min="0" max="100">
+                            </div>
+                        </div>
+                        <p class="alerts-hint muted">
+                            Leave email blank to save watches without alerts.
+                        </p>
+                    </div>
+                    <button type="submit" class="btn btn-accent">Save watches + alerts</button>
                 </form>
                 <div id="bulk-banner" class="subscribe-banner" hidden></div>
-            </div>
-
-            <!-- SUBSCRIBE — applies to all watches -->
-            <div class="subscribe-block">
-                <div class="section-eyebrow">step two · email alerts</div>
-                <h3 class="subscribe-h3">Get a digest when deals appear.</h3>
-                <p class="subscribe-text">
-                    We email you within ~1 minute of any saved search getting a deal above your
-                    score threshold. Multiple deals at once = one digest, not a flood.
-                </p>
-                <form id="subscribe-form" class="search-form">
-                    <div class="field">
-                        <label for="sub-name">Name</label>
-                        <input type="text" id="sub-name" name="name" placeholder="optional">
-                    </div>
-                    <div class="field">
-                        <label for="sub-email">Email</label>
-                        <input type="email" id="sub-email" name="email" required
-                               placeholder="you@example.com">
-                    </div>
-                    <div class="filter-grid">
-                        <div class="field">
-                            <label for="sub-search">Saved watch</label>
-                            <select id="sub-search" name="search_id" required>
-                                <option value="">— loading —</option>
-                            </select>
-                        </div>
-                        <div class="field">
-                            <label for="sub-threshold">Score threshold</label>
-                            <input type="number" id="sub-threshold" name="score_threshold"
-                                   value="70" min="0" max="100">
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-accent">Notify me</button>
-                </form>
-                <div id="subscribe-banner" class="subscribe-banner" hidden></div>
             </div>
         </div>
     </aside>

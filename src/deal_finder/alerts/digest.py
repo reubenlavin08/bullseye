@@ -125,6 +125,176 @@ def mark_notified(listing_ids: list[str]) -> None:
                 )
 
 
+def send_daily_summaries() -> dict:
+    """For each subscriber with daily_summary_enabled, send a summary
+    of below-threshold-but-still-scored listings from the past 24 hours.
+
+    These are listings that:
+      - were appraised within the last 24 hours
+      - did NOT trigger an instant alert (score < subscriber threshold,
+        so notified=FALSE not because we owe an alert but because they
+        weren't deal-y enough)
+      - haven't been summarized yet (summarized_at IS NULL)
+
+    Sends at most one summary per subscriber per 24h cycle (driven by
+    last_summary_sent_at).
+    """
+    sent = 0
+    failed = 0
+    skipped_empty = 0
+    total_listings = 0
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT DISTINCT s.email
+                   FROM subscribers s
+                   WHERE s.active = TRUE
+                     AND s.daily_summary_enabled = TRUE
+                     AND (s.last_summary_sent_at IS NULL
+                          OR s.last_summary_sent_at < NOW() - INTERVAL '23 hours')""",
+            )
+            emails = [r[0] for r in cur.fetchall()]
+
+    for email in emails:
+        rows = _collect_summary_for_email(email)
+        if not rows:
+            skipped_empty += 1
+            continue
+
+        subject, html, text = _render_summary(email, rows)
+        result = send_email(to=email, subject=subject, html=html, text=text)
+        if not result.ok:
+            failed += 1
+            logger.warning("summary send failed to=%s: %s", email, result.message)
+            continue
+
+        # Mark listings summarized + bump subscriber's last_summary_sent_at
+        listing_ids = [m.listing_id for m in rows]
+        with get_conn() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE listings SET summarized_at = NOW() WHERE id = ANY(%s)",
+                        (listing_ids,),
+                    )
+                    cur.execute(
+                        "UPDATE subscribers SET last_summary_sent_at = NOW() WHERE email = %s",
+                        (email,),
+                    )
+        sent += 1
+        total_listings += len(listing_ids)
+        logger.info(
+            "daily summary sent to=%s n=%d backend=%s",
+            email, len(listing_ids), result.backend,
+        )
+
+    return {
+        "sent": sent,
+        "skipped_empty": skipped_empty,
+        "failed": failed,
+        "total_listings": total_listings,
+    }
+
+
+def _collect_summary_for_email(email: str) -> list[DigestMatch]:
+    """Listings appraised in the last 24h on the subscriber's watches
+    that scored BELOW their alert threshold (so they weren't sent as
+    instant alerts) and haven't been summarized yet.
+
+    The whole point: 'here's what we appraised today that didn't make
+    the cut. Did any of these still look interesting to you?'"""
+    matches: list[DigestMatch] = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT l.id, l.title, l.price, l.fair_value,
+                          l.deal_score, l.appraisal_note,
+                          l.listing_url, l.photo_url, l.seller_location,
+                          l.listed_at,
+                          l.appraisal_breakdown,
+                          us.keyword
+                   FROM subscribers s
+                   JOIN user_searches us ON us.id = s.search_id
+                   JOIN listings l ON l.search_id = s.search_id
+                   WHERE s.email = %s
+                     AND s.active = TRUE
+                     AND s.daily_summary_enabled = TRUE
+                     AND l.appraised = TRUE
+                     AND l.rejected = FALSE
+                     AND l.deal_score IS NOT NULL
+                     AND l.deal_score < s.score_threshold
+                     AND l.summarized_at IS NULL
+                     AND l.appraised_at >= NOW() - INTERVAL '24 hours'
+                   ORDER BY l.deal_score DESC, l.appraised_at DESC
+                   LIMIT 30""",
+                (email,),
+            )
+            for r in cur.fetchall():
+                bd = r[10] or {}
+                matches.append(DigestMatch(
+                    listing_id=r[0],
+                    title=r[1] or "",
+                    asking_price=float(r[2]) if r[2] is not None else None,
+                    fair_value=float(r[3]) if r[3] is not None else None,
+                    deal_score=int(r[4]),
+                    confidence_label=bd.get("confidence_label"),
+                    confidence_pm=bd.get("confidence_pm"),
+                    appraisal_note=r[5],
+                    listing_url=r[6] or "",
+                    photo_url=r[7],
+                    seller_location=r[8],
+                    listed_at=r[9],
+                    keyword=r[11],
+                ))
+    return matches
+
+
+def _render_summary(
+    email: str, matches: list[DigestMatch],
+) -> tuple[str, str, str]:
+    n = len(matches)
+    subject = f"bullseye: today's appraisals ({n} below your threshold)"
+    html = _render_summary_html(matches)
+    text = _render_text(matches)
+    return subject, html, text
+
+
+def _render_summary_html(matches: list[DigestMatch]) -> str:
+    parts: list[str] = [_HTML_HEAD]
+    parts.append(
+        f'<h1 style="font-family:Georgia,serif;font-weight:500;letter-spacing:-0.02em;'
+        f'margin:0 0 10px;color:#1a1614;">'
+        f"Today's appraisals (didn't quite hit your threshold)"
+        f'</h1>'
+    )
+    parts.append(
+        f'<p style="color:#6b5d52;margin:0 0 28px;font-size:14px;">'
+        f"We scored {len(matches)} listings on your watches in the last 24h. "
+        f"None crossed your alert threshold, but some might still be interesting. "
+        f"Top scores first."
+        f'</p>'
+    )
+
+    by_keyword: dict[str, list[DigestMatch]] = {}
+    for m in matches:
+        by_keyword.setdefault(m.keyword, []).append(m)
+
+    for kw in sorted(by_keyword.keys()):
+        parts.append(
+            f'<h2 style="font-family:Georgia,serif;font-style:italic;'
+            f'font-weight:500;font-size:16px;color:#1a1614;'
+            f'margin:24px 0 10px;letter-spacing:0.02em;'
+            f'text-transform:lowercase;">'
+            f'watch: {escape(kw)}</h2>'
+        )
+        for m in by_keyword[kw]:
+            parts.append(_render_match_card(m))
+
+    parts.append("</div></body></html>")
+    return "\n".join(parts)
+
+
 def send_pending_digests() -> dict:
     """Run one digest cycle. Returns counts for logging."""
     sent = 0

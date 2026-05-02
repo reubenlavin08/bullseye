@@ -1171,6 +1171,92 @@ h1, h2, h3 {
     display: none !important;
 }
 
+/* ---------- Home location strip ---------- */
+
+.home-location {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.home-loc-display {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+    flex-wrap: wrap;
+}
+
+.home-loc-display strong {
+    color: var(--fg);
+    font-weight: 600;
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 14px;
+}
+
+.home-loc-edit {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    color: var(--fg-muted);
+    padding: 3px 10px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 200ms var(--ease);
+}
+
+.home-loc-edit:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.home-loc-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+}
+
+.home-loc-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* ---------- Inline alerts block within save-watch forms ---------- */
+
+.alerts-block {
+    margin-top: 8px;
+    padding: 14px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(199, 90, 60, 0.25);
+    border-radius: var(--radius-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.alerts-eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.alerts-hint {
+    font-size: 11px;
+    margin: 0;
+    line-height: 1.5;
+}
+
 /* ---------- Reveal-on-scroll for arbitrary blocks ---------- */
 
 .reveal {

@@ -611,11 +611,76 @@
         });
     }
 
+    // --- Home location strip ------------------------------------------
+
+    async function setupHomeLocation() {
+        const wrap = document.getElementById("home-location");
+        if (!wrap) return;
+        const display = wrap.querySelector(".home-loc-display");
+        const form = wrap.querySelector("#home-form");
+        const labelEl = wrap.querySelector(".home-loc-label");
+        const editBtn = wrap.querySelector(".home-loc-edit");
+        const cancelBtn = wrap.querySelector(".home-loc-cancel");
+        const fLabel = form.querySelector("#home-label");
+        const fLat = form.querySelector("#home-lat");
+        const fLng = form.querySelector("#home-lng");
+
+        async function load() {
+            try {
+                const res = await fetch("/api/settings");
+                const data = await res.json();
+                if (data.home_label || data.home_latitude !== null) {
+                    const txt = data.home_label
+                        ? data.home_label
+                        : `${data.home_latitude}, ${data.home_longitude}`;
+                    labelEl.textContent = txt;
+                    fLabel.value = data.home_label || "";
+                    fLat.value = data.home_latitude ?? "";
+                    fLng.value = data.home_longitude ?? "";
+                }
+            } catch (e) { /* leave default */ }
+        }
+
+        editBtn.addEventListener("click", () => {
+            form.hidden = false;
+            display.hidden = true;
+        });
+
+        cancelBtn.addEventListener("click", () => {
+            form.hidden = true;
+            display.hidden = false;
+        });
+
+        form.addEventListener("submit", async (ev) => {
+            ev.preventDefault();
+            const fd = new FormData(form);
+            try {
+                const res = await fetch("/api/settings", {
+                    method: "POST",
+                    body: fd,
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    form.hidden = true;
+                    display.hidden = false;
+                    load();
+                } else {
+                    alert("Couldn't save: " + (data.error || "unknown"));
+                }
+            } catch (err) {
+                alert("Network error: " + err.message);
+            }
+        });
+
+        await load();
+    }
+
     function bootAll() {
         init();
         setupReveal();
         setupSidePanels();
         setupTabs();
+        setupHomeLocation();
         setupSingleForm();
         setupBulkForm();
         setupSubscribeForm();
