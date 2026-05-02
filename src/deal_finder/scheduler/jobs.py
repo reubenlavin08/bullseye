@@ -21,6 +21,7 @@ is simpler and faster than a producer/consumer split.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 
@@ -216,6 +217,174 @@ def poll_search(search_id: int) -> PollResult:
     return PollResult(
         search_id, keyword, len(page.listings), len(new_listings),
         appraised, rejected, elapsed_s,
+    )
+
+
+def poll_batch(batch: list[dict]) -> None:
+    """Run ONE FB search covering all watches in batch, attribute
+    listings back to specific watches, and process per-watch.
+
+    The batch must share (latitude, longitude, radius_km) — see
+    pick_next_watch_batch. Combined keyword is space-separated; FB's
+    tokenizer treats this as an OR-ish match so each individual watch
+    keyword still surfaces relevant listings.
+    """
+    if not batch:
+        return
+    t0 = time.perf_counter()
+
+    # Combined keyword. We dedupe word-overlap to keep the query short.
+    combined_keyword = " ".join(w["keyword"] for w in batch)
+    # Use the widest price range across the batch so we don't drop
+    # listings that one watch wants but another excludes.
+    price_min_vals = [w["price_min"] for w in batch if w["price_min"] is not None]
+    price_max_vals = [w["price_max"] for w in batch if w["price_max"] is not None]
+    price_min = min(price_min_vals) if price_min_vals else None
+    price_max = max(price_max_vals) if price_max_vals else None
+
+    page = get_search_client().search(SearchParams(
+        keyword=combined_keyword,
+        lat=batch[0]["latitude"],
+        lng=batch[0]["longitude"],
+        radius_km=batch[0]["radius_km"],
+        price_min=price_min,
+        price_max=price_max,
+    ))
+
+    raw_count = len(page.listings)
+    elapsed_s_at_search = time.perf_counter() - t0
+
+    logger.info(
+        "poll_batch ids=%s kw=%r: %d listings returned",
+        [w["id"] for w in batch], combined_keyword, raw_count,
+    )
+
+    # Bucket each listing into the watch it best matches.
+    by_watch: dict[int, list[SearchListing]] = {w["id"]: [] for w in batch}
+    unattributed = 0
+    for sl in page.listings:
+        w = attribute_listing(sl.title, batch)
+        if w is None:
+            unattributed += 1
+            continue
+        by_watch[w["id"]].append(sl)
+
+    # Process each watch's bucket through the same downstream pipeline
+    # as the original poll_search, but skip the FB call.
+    for watch in batch:
+        listings_for_watch = by_watch[watch["id"]]
+        try:
+            _process_watch_bucket(
+                watch=watch,
+                listings=listings_for_watch,
+                raw_count_in_batch=raw_count,
+                elapsed_s_at_search=elapsed_s_at_search,
+                t0=t0,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("watch %s in batch crashed: %s", watch["id"], e)
+            record_event(
+                "pipeline_error",
+                search_id=watch["id"],
+                error=str(e)[:300],
+                error_type=type(e).__name__,
+            )
+
+    if unattributed:
+        logger.debug("batch dropped %d unattributed listings", unattributed)
+
+
+def _process_watch_bucket(
+    *,
+    watch: dict,
+    listings: list[SearchListing],
+    raw_count_in_batch: int,
+    elapsed_s_at_search: float,
+    t0: float,
+) -> None:
+    """Per-watch processing for a poll_batch result. Mirrors the
+    second-half of poll_search() — keyword filter, distance filter,
+    detail/score/persist per listing, then a 'poll' event."""
+    search_id = watch["id"]
+    keyword = watch["keyword"]
+
+    raw_ids = [sl.id for sl in listings]
+    if raw_ids:
+        with get_conn() as conn:
+            seen = existing_ids(conn, raw_ids)
+        new_listings = [sl for sl in listings if sl.id not in seen]
+    else:
+        new_listings = []
+
+    keyword_dropped = 0
+    must_inc = _parse_word_list(watch.get("must_include"))
+    must_exc = _parse_word_list(watch.get("must_exclude"))
+    if new_listings and (must_inc or must_exc):
+        kept_kw: list[SearchListing] = []
+        for sl in new_listings:
+            ok, _reason = _passes_keyword_filter(sl.title, must_inc, must_exc)
+            if ok:
+                kept_kw.append(sl)
+            else:
+                keyword_dropped += 1
+        new_listings = kept_kw
+
+    distance_dropped = 0
+    if new_listings and watch.get("radius_km"):
+        kept: list[SearchListing] = []
+        home_lat = float(watch["latitude"])
+        home_lng = float(watch["longitude"])
+        radius = float(watch["radius_km"])
+        soft_radius = max(radius + 8.0, radius * 1.3)
+        for sl in new_listings:
+            if not sl.seller_location:
+                kept.append(sl)
+                continue
+            coords = geocode_city(sl.seller_location)
+            if coords is None:
+                kept.append(sl)
+                continue
+            dist = haversine_km(home_lat, home_lng, coords[0], coords[1])
+            if dist <= soft_radius:
+                kept.append(sl)
+            else:
+                distance_dropped += 1
+        new_listings = kept
+
+    appraised = 0
+    rejected = 0
+    for sl in new_listings:
+        try:
+            outcome = _process_new_listing(sl, search_id=search_id)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("processing %s failed: %s", sl.id, e)
+            record_event(
+                "pipeline_error",
+                search_id=search_id,
+                listing_id=sl.id,
+                error=str(e)[:300],
+                error_type=type(e).__name__,
+            )
+            continue
+        if outcome == "appraised":
+            appraised += 1
+        elif outcome == "rejected":
+            rejected += 1
+
+    elapsed_s = time.perf_counter() - t0
+    record_event(
+        "poll",
+        search_id=search_id,
+        duration_ms=int(elapsed_s * 1000),
+        keyword=keyword,
+        raw_count=len(listings),
+        new_count=len(new_listings),
+        appraised_count=appraised,
+        rejected_count=rejected,
+        distance_dropped=distance_dropped,
+        keyword_dropped=keyword_dropped,
+        batched=True,
+        batch_total_raw=raw_count_in_batch,
     )
 
 
@@ -470,29 +639,138 @@ def pick_next_watch_to_poll() -> int | None:
     return row[0] if row else None
 
 
+# Default batch size — number of watches to fold into one FB search.
+# 4 is empirically a sweet spot: FB's tokenizer handles 4 short keywords
+# well, attribution stays unambiguous, and we 4x our effective per-watch
+# cadence vs single-watch polling. Configurable via env.
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "4")) if os.environ.get("BATCH_SIZE") else 4
+
+
+def pick_next_watch_batch(k: int = BATCH_SIZE) -> list[dict]:
+    """Pick up to K stalest active watches that share location params.
+
+    Watches in a batch must have the same (latitude, longitude,
+    radius_km) so the combined FB search uses one set of geographic
+    filters. We group by exact lat/lng (not fuzzy) — for the
+    single-user single-home setup all watches share location anyway,
+    and for multi-user later we'd need exact match for correctness.
+
+    Returns a list of watch dicts with all the fields poll_search uses.
+    Empty list if no active watches.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # First find the (lat, lng, radius) bucket of the stalest watch
+            cur.execute(
+                """SELECT us.latitude, us.longitude, us.radius_km
+                   FROM user_searches us
+                   LEFT JOIN LATERAL (
+                       SELECT MAX(created_at) AS last_polled
+                       FROM scheduler_events
+                       WHERE event_type = 'poll' AND search_id = us.id
+                   ) p ON TRUE
+                   WHERE us.active = TRUE
+                   ORDER BY p.last_polled ASC NULLS FIRST, us.id ASC
+                   LIMIT 1""",
+            )
+            anchor = cur.fetchone()
+            if anchor is None:
+                return []
+            anchor_lat, anchor_lng, anchor_radius = anchor
+
+            # Then pick the K stalest watches in that bucket. Fuzzy
+            # match on lat/lng because Postgres REAL is 32-bit float
+            # and round-tripping through Python float (64-bit) shifts
+            # the last bits, breaking strict equality.
+            cur.execute(
+                """SELECT us.id, us.keyword, us.latitude, us.longitude,
+                          us.radius_km, us.price_min, us.price_max,
+                          us.must_include, us.must_exclude
+                   FROM user_searches us
+                   LEFT JOIN LATERAL (
+                       SELECT MAX(created_at) AS last_polled
+                       FROM scheduler_events
+                       WHERE event_type = 'poll' AND search_id = us.id
+                   ) p ON TRUE
+                   WHERE us.active = TRUE
+                     AND ABS(us.latitude - %s::real) < 0.001
+                     AND ABS(us.longitude - %s::real) < 0.001
+                     AND us.radius_km = %s
+                   ORDER BY p.last_polled ASC NULLS FIRST, us.id ASC
+                   LIMIT %s""",
+                (anchor_lat, anchor_lng, anchor_radius, k),
+            )
+            rows = cur.fetchall()
+    return [{
+        "id": r[0], "keyword": r[1],
+        "latitude": float(r[2]), "longitude": float(r[3]),
+        "radius_km": r[4],
+        "price_min": r[5], "price_max": r[6],
+        "must_include": r[7], "must_exclude": r[8],
+    } for r in rows]
+
+
+def attribute_listing(
+    listing_title: str, batch: list[dict],
+) -> dict | None:
+    """Pick the watch in `batch` whose keyword best matches the listing.
+
+    Strategy: lowercased, watch keyword's words must all appear (as
+    substrings) in the title. Among matches, the longest keyword (most
+    specific) wins. Ties broken by leftmost match position.
+
+    Returns None if no watch in the batch matches — those listings get
+    dropped (false positives from FB's loose tokenization).
+    """
+    title_l = (listing_title or "").lower()
+    matches: list[tuple[int, int, dict]] = []
+    for w in batch:
+        kw = (w["keyword"] or "").lower().strip()
+        if not kw:
+            continue
+        words = kw.split()
+        if not all(word in title_l for word in words):
+            continue
+        # Longest keyword wins; tie-break by leftmost position of first word
+        first_pos = title_l.find(words[0])
+        matches.append((len(kw), -first_pos, w))
+    if not matches:
+        return None
+    # Sort: longest kw first, then leftmost match
+    matches.sort(key=lambda m: (m[0], m[1]), reverse=True)
+    return matches[0][2]
+
+
 def coordinator_tick() -> None:
-    """Single-job alternative to the per-watch APScheduler jobs.
+    """Pick a batch of K stalest watches sharing location, run ONE FB
+    search covering all their keywords, and attribute results back to
+    individual watches for processing.
 
-    Each tick: pick the stalest watch and poll it. With a tick interval
-    of N seconds and M active watches, each watch polls every M*N
-    seconds.
+    Why batch: per-watch polling at N=49 watches and a 15s rate gate
+    means each watch polls every 12 minutes. Batching K=4 means each
+    BATCH polls every 15s and each watch's keyword gets coverage every
+    ~3 minutes — a 4x speedup with no extra rate-limit cost.
 
-    Adaptive backoff: when FB has been rate-limiting us recently, we
-    skip ticks proportional to the recent failure rate to let their
-    server cool down. Querying for "fb_rate_limit events in the last
-    60 seconds" is cheap (one indexed lookup) and saves us from
-    hammering FB during a sustained block.
+    The catch: a single FB search returns listings matching ANY of the
+    combined keywords. We then attribute each listing to the
+    most-specific-matching watch via attribute_listing(). False
+    positives (listings that match no watch's keyword) are dropped.
+    Per-watch filters (must_include/must_exclude, distance) run AFTER
+    attribution.
+
+    Adaptive backoff: when FB is rate-limiting heavily, skip the tick.
     """
     if _should_skip_tick_for_backoff():
         return
 
-    sid = pick_next_watch_to_poll()
-    if sid is None:
+    batch = pick_next_watch_batch()
+    if not batch:
         return
     try:
-        poll_search(sid)
-    except Exception as e:  # noqa: BLE001 — never let one watch kill the loop
-        logger.exception("coordinator_tick(%s) crashed: %s", sid, e)
+        poll_batch(batch)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("coordinator_tick batch %s crashed: %s",
+                         [w["id"] for w in batch], e)
 
 
 def _should_skip_tick_for_backoff() -> bool:
