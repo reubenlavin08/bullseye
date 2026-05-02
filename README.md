@@ -177,20 +177,42 @@ Working today:
 - ✅ Per-watch keyword must-include / must-exclude (backend; UI in progress)
 
 In progress:
-- 🔄 Multi-keyword grouping (one FB poll covers many related watches)
+- 🔄 Rate-limit hardening: aggressive exponential cooldown is in;
+  next up is residential-proxy rotation + `curl_cffi` JA3 impersonation
+  (cheapest credible bypass for FB's per-IP bucket)
+- 🔄 Multi-keyword grouping (one FB poll covers many watches) — code
+  is wired but `BATCH_POLL_MODE` ships off until
+  `tests/test_batch_polling_live.py` confirms FB's combined-keyword
+  search returns per-term results
 - 🔄 UI controls for keyword must-include/must-exclude
 
-Roadmap:
+Roadmap (in priority order — gated on rate-limit reliability first):
+- 🛒 **eBay sold-comps integration** — developer account in hand;
+  swap Marketplace asking-price comps for eBay sold comps via the
+  Finding API (5,000 req/day, proper rate limits, ground-truth prices
+  instead of asking-prices)
 - LLM-suggested offer price ("you should offer $X")
-- Swap Marketplace comps → eBay sold comps via the official Finding API
-  (5,000 req/day proper rate limits — ground truth instead of asking-prices)
+- Keyword-level FB result cache (collapse repeated polls of overlapping
+  watches into one request — orthogonal to multi-keyword batching)
 - Per-watch dashboard drill-down (recent matches per watch)
 - Price-drop notifications on already-seen listings
 
 ## Tests
 
-143 tests covering scoring formula, condition signals, rejection
-patterns, bimodal cluster splitter, score breakdown contract.
+96 unit tests covering scoring formula, condition signals, rejection
+patterns, bimodal cluster splitter, watch-batching attribution, score
+breakdown contract.
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+Plus a live-network integration suite gated on `RUN_LIVE_TESTS=1` for
+empirically verifying FB's combined-keyword search behavior:
+
+```bash
+RUN_LIVE_TESTS=1 .venv\Scripts\python.exe -m pytest tests/test_batch_polling_live.py -v -s
+```
 
 ```bash
 .venv\Scripts\python.exe -m pytest tests/ -v

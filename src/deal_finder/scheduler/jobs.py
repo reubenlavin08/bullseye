@@ -224,10 +224,23 @@ def poll_batch(batch: list[dict]) -> None:
     """Run ONE FB search covering all watches in batch, attribute
     listings back to specific watches, and process per-watch.
 
+    HTTP request count: this function makes exactly ONE call to the
+    FB GraphQL endpoint regardless of len(batch). The batch's keywords
+    are space-joined into a single `query` field on a single
+    SearchParams. Detail/PDP fetches per attributed listing happen
+    after the search returns — those are separate requests, identical
+    to single-watch polling.
+
+    Why this can still be wrong: we have not empirically verified that
+    FB does OR-matching across the joined tokens. If FB ranks results
+    by AND-relevance, a query like "arduino raspberry pi esp32" might
+    only return listings that mention multiple of those terms — losing
+    most of the per-keyword listings we'd otherwise get from polling
+    each watch separately. tests/test_batch_polling_live.py is the
+    pending verification.
+
     The batch must share (latitude, longitude, radius_km) — see
-    pick_next_watch_batch. Combined keyword is space-separated; FB's
-    tokenizer treats this as an OR-ish match so each individual watch
-    keyword still surfaces relevant listings.
+    pick_next_watch_batch.
     """
     if not batch:
         return
@@ -242,6 +255,7 @@ def poll_batch(batch: list[dict]) -> None:
     price_min = min(price_min_vals) if price_min_vals else None
     price_max = max(price_max_vals) if price_max_vals else None
 
+    # >>> THE single HTTP call. One request, K keywords. <<<
     page = get_search_client().search(SearchParams(
         keyword=combined_keyword,
         lat=batch[0]["latitude"],
@@ -741,6 +755,31 @@ def attribute_listing(
     return matches[0][2]
 
 
+# --- Adaptive rate-limit backoff -----------------------------------------
+#
+# Philosophy: the moment FB rate-limits us we should HARD pull back, not
+# pretend nothing happened. Exponential cooldown that resets when FB
+# starts answering cleanly again.
+#
+# Cooldown schedule (each rate-limit event in the last 30 min compounds):
+#   1 rate limit  -> 60s cooldown
+#   2 rate limits -> 120s
+#   3 rate limits -> 240s
+#   4 rate limits -> 480s
+#   5+            -> 600s (10 min cap)
+#
+# The cooldown clock starts at the MOST RECENT rate limit. So if we get
+# hit twice in a row, we wait 120s after the *second* hit, not after the
+# first. After 30 min with no rate limits, the count rolls off and we
+# fully reset. Configurable via env if anyone wants to tune.
+RATE_LIMIT_BASE_COOLDOWN_S = int(os.environ.get("RATE_LIMIT_BASE_COOLDOWN_S", "60"))
+RATE_LIMIT_MAX_COOLDOWN_S = int(os.environ.get("RATE_LIMIT_MAX_COOLDOWN_S", "600"))
+RATE_LIMIT_WINDOW_S = int(os.environ.get("RATE_LIMIT_WINDOW_S", "1800"))  # 30 min
+
+# Module-level state so we only log "entered cooldown" once, not every tick.
+_last_logged_cooldown_until: float = 0.0
+
+
 def coordinator_tick() -> None:
     """Pick the stalest watch and run one FB search for it.
 
@@ -750,12 +789,16 @@ def coordinator_tick() -> None:
         that come back. Predictable, accurate, FB returns relevant
         results for that one keyword.
       "on" — combined-keyword batching. K=BATCH_SIZE stalest watches
-        share one FB call with a space-joined keyword. RISKY: we
-        haven't empirically verified that FB returns OR-matching
+        share ONE FB request with a space-joined keyword string. The
+        request count is 1, not K — see poll_batch() docstring. RISKY:
+        we haven't empirically verified that FB returns OR-matching
         results for multi-word queries; it may rank by AND-relevance
-        and miss the less-popular keywords. Off until verified.
+        and miss the less-popular keywords. Off until verified by
+        tests/test_batch_polling_live.py.
 
-    Adaptive backoff: when FB is rate-limiting heavily, skip the tick.
+    Adaptive backoff: when FB rate-limited us recently, skip the tick.
+    Cooldown is exponential and starts from the most recent rate-limit
+    event — see _compute_cooldown_remaining_s.
     """
     if _should_skip_tick_for_backoff():
         return
@@ -781,39 +824,67 @@ def coordinator_tick() -> None:
         logger.exception("coordinator_tick(%s) crashed: %s", sid, e)
 
 
-def _should_skip_tick_for_backoff() -> bool:
-    """Return True if we should skip this tick because FB has been
-    rate-limiting recently.
+def _compute_cooldown_remaining_s() -> int:
+    """How many seconds to wait before next FB request, based on
+    recent rate-limit history.
 
-    Strategy: look at the rate-limit event count in the last 60s.
-      0 events  -> proceed (clean)
-      1-2       -> proceed (background noise)
-      3-5       -> skip with 50% probability
-      6+        -> skip
+    Returns 0 when we're clear to proceed.
+
+    Strategy:
+      - count fb_rate_limit events in the last RATE_LIMIT_WINDOW_S
+      - cooldown = base * 2^(min(n-1, 4)), capped at MAX
+      - clock starts at the MOST RECENT rate-limit timestamp
+      - remaining = (most_recent + cooldown) - now
     """
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT COUNT(*) FROM scheduler_events
+                    f"""SELECT COUNT(*),
+                              EXTRACT(EPOCH FROM (NOW() - MAX(created_at)))
+                       FROM scheduler_events
                        WHERE event_type = 'fb_rate_limit'
-                         AND created_at >= NOW() - INTERVAL '60 seconds'""",
+                         AND created_at >= NOW() - INTERVAL '{RATE_LIMIT_WINDOW_S} seconds'""",
                 )
-                recent = cur.fetchone()[0]
+                row = cur.fetchone()
     except Exception:  # noqa: BLE001
-        return False  # fail open
+        return 0  # fail open — better to poll than to get stuck
 
-    if recent <= 2:
+    n, secs_since_last = row[0], row[1]
+    if not n or secs_since_last is None:
+        return 0
+
+    # Exponential cooldown: 60s, 120s, 240s, 480s, 600s
+    cooldown = min(
+        RATE_LIMIT_BASE_COOLDOWN_S * (2 ** min(int(n) - 1, 4)),
+        RATE_LIMIT_MAX_COOLDOWN_S,
+    )
+    remaining = cooldown - float(secs_since_last)
+    return max(0, int(remaining))
+
+
+def _should_skip_tick_for_backoff() -> bool:
+    """Skip this tick if we're inside the rate-limit cooldown window."""
+    global _last_logged_cooldown_until
+    remaining = _compute_cooldown_remaining_s()
+    if remaining <= 0:
         return False
-    if recent >= 6:
-        logger.info("coordinator: skipping tick — %d rate-limits in last 60s", recent)
-        return True
-    # 3-5: probabilistic skip so we don't 100% halt
-    import random
-    if random.random() < 0.5:
-        logger.info(
-            "coordinator: probabilistic skip — %d rate-limits in last 60s",
-            recent,
+
+    # Log "entered cooldown" once per cooldown period, not every tick.
+    cooldown_until = time.time() + remaining
+    if cooldown_until > _last_logged_cooldown_until + 5:
+        # New / extended cooldown — log it and emit a dashboard event.
+        logger.warning(
+            "coordinator: rate-limit cooldown active — skipping ticks for ~%ds",
+            remaining,
         )
-        return True
-    return False
+        record_event(
+            "rate_limit_backoff",
+            cooldown_remaining_s=remaining,
+        )
+        _last_logged_cooldown_until = cooldown_until
+    else:
+        logger.debug(
+            "coordinator: still in cooldown (~%ds remaining)", remaining,
+        )
+    return True
