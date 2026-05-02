@@ -102,18 +102,38 @@ class ScoreBreakdown:
     # than every comp; 1.0 = more expensive than every comp. As of v2.0
     # this is the PRIMARY driver of deal_score.
     percentile_rank: float | None = None
+    # Condition-signal adjustment in points (-35 to +10). Subtracts from
+    # the percentile-derived raw_score before confidence cap. Captures
+    # "this Civic has brake issues, even though comps are clean."
+    # See appraisal/condition_signals.py.
+    condition_adjustment: int = 0
+    condition_flags: list[str] | None = None
+    condition_note: str | None = None
+    # Score before the condition adjustment was applied — useful so the
+    # UI can show "raw 95 - 15 (needs_repair) = 80".
+    raw_score_pre_condition: int | None = None
     # When True, we refused to score this listing because comp data was
     # insufficient. UI should show "not enough comparable data" rather
     # than a misleading score. As of v3.0 we no longer fall back to
     # LLM hallucinations for fair_value when comps are sparse.
     unscoreable: bool = False
     unscoreable_reason: str | None = None
-    formula_version: str = "3.0"
+    formula_version: str = "4.0"
 
 
 # Minimum comps required to trust the percentile rank. Below this we
 # refuse to score rather than make stuff up.
 MIN_COMPS_TO_SCORE = 5
+
+# Categories that are condition-sensitive (high-value, condition can
+# vary widely). For these, we apply a higher minimum confidence_pm
+# because mileage / accident history / wear matter as much as the comp
+# median, and we can't fully model that statistically.
+# Map FB marketplace_listing_category_id -> minimum confidence_pm.
+CATEGORY_MIN_CONFIDENCE_PM: dict[str, int] = {
+    "807311116002614": 20,   # Cars / vehicles
+    # Add real-estate, motorcycles, etc. here as we encounter them.
+}
 
 
 # IQR / median above this threshold flags the comp set as too varied
@@ -130,6 +150,10 @@ def compute_score(
     comp: CompStats,
     fair_value_from_llm: float | None = None,
     asking_discount: float = DEFAULT_ASKING_DISCOUNT,
+    condition_adjustment: int = 0,
+    condition_flags: list[str] | None = None,
+    condition_note: str | None = None,
+    category_id: str | None = None,
 ) -> ScoreBreakdown:
     """Compute the deterministic deal score for a listing.
 
@@ -190,9 +214,30 @@ def compute_score(
 
     confidence_pm, confidence_label = _confidence(comp, source)
 
+    # Category-aware confidence floor: condition-sensitive categories
+    # (vehicles, real estate) get a wider minimum interval because
+    # mileage / accident history / wear shift true value as much as
+    # the comp distribution does.
+    if category_id and category_id in CATEGORY_MIN_CONFIDENCE_PM:
+        floor_pm = CATEGORY_MIN_CONFIDENCE_PM[category_id]
+        if confidence_pm < floor_pm:
+            confidence_pm = floor_pm
+            if confidence_pm <= 7:
+                confidence_label = "high"
+            elif confidence_pm <= 14:
+                confidence_label = "medium"
+            else:
+                confidence_label = "low"
+
     raw_score = (1 - pct_rank) * 100
+    raw_score_pre_condition = max(0, min(100, int(round(raw_score))))
+
+    # Apply condition adjustment (e.g. -15 for "needs repair", +5 for
+    # "excellent condition"). Linear, additive, deterministic.
+    adjusted_raw = raw_score + condition_adjustment
+
     confidence_cap = 100 - confidence_pm
-    capped = min(raw_score, confidence_cap)
+    capped = min(adjusted_raw, confidence_cap)
     deal_score = max(0, min(100, int(round(capped))))
 
     iqr_ratio = None
@@ -220,6 +265,10 @@ def compute_score(
         data_quality_poor=data_quality_poor,
         iqr_to_median_ratio=iqr_ratio,
         percentile_rank=pct_rank,
+        condition_adjustment=condition_adjustment,
+        condition_flags=condition_flags or [],
+        condition_note=condition_note,
+        raw_score_pre_condition=raw_score_pre_condition,
     )
 
 

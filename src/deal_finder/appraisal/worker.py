@@ -28,6 +28,7 @@ from ..db.comps import CompStats
 from ..scraper.facebook_detail import get_default_client as get_detail_client
 from ..scraper.price_extraction import resolve_price
 from ..scraper.rejection import evaluate as evaluate_rejection
+from .condition_signals import extract_condition_signals
 from .formula import compute_score, llm_needed
 from .normalizer import (
     DEFAULT_MODEL as NORMALIZER_MODEL,
@@ -268,10 +269,22 @@ def _process_one(
         category_id=row.get("category_id"),
     )
 
-    # 3. Compute score deterministically from comps. Refuses to score
-    #    when comp data is insufficient (returns unscoreable=True).
+    # 3a. Extract condition signals from the description (if any).
+    #     Free flags from the small LLM; deterministic discount factors
+    #     applied later by the formula.
+    cond = extract_condition_signals(description)
+
+    # 3b. Compute score deterministically from comps + condition.
+    #     Refuses to score when comp data is insufficient.
     try:
-        breakdown = compute_score(asking_price=asking, comp=comp)
+        breakdown = compute_score(
+            asking_price=asking,
+            comp=comp,
+            condition_adjustment=cond.score_adjustment,
+            condition_flags=cond.flags_fired,
+            condition_note=cond.note,
+            category_id=row.get("category_id"),
+        )
     except ValueError as e:
         logger.warning("formula rejected listing %s: %s", listing_id, e)
         return False

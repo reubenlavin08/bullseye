@@ -216,6 +216,82 @@ def test_cap_does_not_inflate_low_scores_when_scoreable():
     assert s.deal_score < 30
 
 
+# --- Condition adjustment + category floor ------------------------------
+
+def test_condition_negative_lowers_score():
+    """Otherwise-unicorn deal with 'needs_repair' flag scores lower."""
+    comp = _comp(n=14, median=400.0, trimmed_median=400.0, iqr=40.0)
+    s_clean = compute_score(asking_price=120.0, comp=comp)
+    s_broken = compute_score(
+        asking_price=120.0, comp=comp,
+        condition_adjustment=-15,
+        condition_flags=["needs_repair"],
+    )
+    assert s_broken.deal_score < s_clean.deal_score
+    # Same comp, same percentile — only condition diff
+    assert s_broken.condition_adjustment == -15
+    assert "needs_repair" in (s_broken.condition_flags or [])
+    # raw_score_pre_condition should match the clean version
+    assert s_broken.raw_score_pre_condition == s_clean.raw_score_pre_condition
+
+
+def test_condition_positive_can_boost_within_cap():
+    """An 'excellent_condition' flag boosts the raw score (still
+    bounded by confidence cap)."""
+    comp = _comp(n=14, median=400.0, trimmed_median=400.0, iqr=40.0)
+    s_neutral = compute_score(asking_price=300.0, comp=comp)
+    s_mint = compute_score(
+        asking_price=300.0, comp=comp,
+        condition_adjustment=+5,
+        condition_flags=["excellent_condition"],
+    )
+    assert s_mint.deal_score >= s_neutral.deal_score
+    assert s_mint.condition_adjustment == 5
+
+
+def test_condition_adjustment_recorded_in_breakdown():
+    comp = _comp(n=10, median=400.0, trimmed_median=400.0)
+    s = compute_score(
+        asking_price=200.0, comp=comp,
+        condition_adjustment=-20,
+        condition_flags=["accident_history"],
+        condition_note="Frame damage from prior accident.",
+    )
+    assert s.condition_adjustment == -20
+    assert s.condition_flags == ["accident_history"]
+    assert s.condition_note == "Frame damage from prior accident."
+
+
+def test_category_confidence_floor_applies_to_vehicles():
+    """A vehicle listing should never have confidence_pm below 20."""
+    # Plenty of comps + tight IQR would normally yield confidence_pm=5.
+    comp = _comp(n=15, median=8000.0, trimmed_median=8000.0, iqr=400.0)
+    s = compute_score(
+        asking_price=5000.0, comp=comp,
+        category_id="807311116002614",  # cars
+    )
+    assert s.confidence_pm >= 20
+    assert s.confidence_label == "low"
+
+
+def test_category_floor_does_not_apply_to_other_categories():
+    """Non-vehicle categories keep their natural confidence."""
+    comp = _comp(n=15, median=400.0, trimmed_median=400.0, iqr=20.0)
+    s = compute_score(
+        asking_price=300.0, comp=comp,
+        category_id="some_random_id",
+    )
+    # Should be high-confidence (n=15 + tight IQR)
+    assert s.confidence_pm < 10
+    assert s.confidence_label == "high"
+
+
+def test_no_category_id_no_floor():
+    comp = _comp(n=15, median=400.0, trimmed_median=400.0, iqr=20.0)
+    s = compute_score(asking_price=300.0, comp=comp, category_id=None)
+    assert s.confidence_pm < 10
+
+
 # --- Data-quality flag (heterogeneous comps) ----------------------------
 
 def test_data_quality_flagged_when_iqr_exceeds_median():

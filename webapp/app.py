@@ -405,6 +405,7 @@ def appraise(listing_id: str):
     """
     from dataclasses import asdict
 
+    from deal_finder.appraisal.condition_signals import extract_condition_signals
     from deal_finder.appraisal.formula import compute_score, llm_needed
     from deal_finder.appraisal.normalizer import normalize_title
     from deal_finder.appraisal.scorer import estimate_fair_value
@@ -488,7 +489,8 @@ def appraise(listing_id: str):
             note = llm_estimate.note
             model_used = llm_estimate.model
 
-    # 6) Compute deterministic score
+    # 6) Extract condition signals + compute deterministic score
+    cond = extract_condition_signals(pl.description)
     try:
         breakdown = compute_score(
             asking_price=pl.resolved_price,
@@ -496,6 +498,10 @@ def appraise(listing_id: str):
             fair_value_from_llm=(
                 llm_estimate.fair_value if llm_estimate else None
             ),
+            condition_adjustment=cond.score_adjustment,
+            condition_flags=cond.flags_fired,
+            condition_note=cond.note,
+            category_id=getattr(pl, "category_id", None),
         )
     except ValueError as e:
         return jsonify({"ok": False, "error": f"formula: {e}"}), 422

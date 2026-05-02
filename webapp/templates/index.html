@@ -17,21 +17,69 @@
                 <span class="subtitle">statistical marketplace appraisal</span>
             </div>
             <nav class="header-nav">
-                <a href="#search">Search</a>
-                <a href="#listings">Listings</a>
                 <a href="#subscribe">Subscribe</a>
+                <a href="#search-form">Test search</a>
+                <a href="#listings">Listings</a>
             </nav>
         </div>
     </header>
 
-    <section class="hero" id="search">
+    <section class="hero" id="top">
         <div class="container">
-            <div class="section-eyebrow">find better deals, faster</div>
-            <h1>Score every Marketplace listing against <em>real market data</em>.</h1>
+            <div class="section-eyebrow">tell us what you want · we'll watch · we'll email</div>
+            <h1>The Marketplace deals you want, <em>delivered</em>.</h1>
             <p class="hero-sub">
-                Type a keyword, get a percentile-ranked score for every listing nearby.
-                The math is deterministic. The comps are visible. No vibes.
+                Save what you're looking for — exact item, distance you'd drive,
+                price range, score threshold. We poll Marketplace every minute,
+                score every new listing against real market data, and email you
+                the moment one beats your bar. Typically within 1–2 minutes of
+                the listing being posted.
             </p>
+        </div>
+    </section>
+
+    <section class="subscribe-section reveal" id="subscribe">
+        <div class="container">
+            <div class="section-head">
+                <div>
+                    <div class="section-eyebrow">step one · subscribe</div>
+                    <h2>Set your alert.</h2>
+                </div>
+            </div>
+
+            <p class="hero-sub" style="margin-bottom: 28px; max-width: 720px;">
+                Pick the saved search and a score threshold (70+ is "good deal",
+                85+ is "drop everything and message the seller").
+                Every listing we find above your threshold lands in your inbox.
+            </p>
+
+            <form id="subscribe-form" class="subscribe-form">
+                <div class="field">
+                    <label for="sub-name">Name (optional)</label>
+                    <input type="text" id="sub-name" name="name" placeholder="Reuben">
+                </div>
+                <div class="field">
+                    <label for="sub-email">Email</label>
+                    <input type="email" id="sub-email" name="email" required
+                           placeholder="you@example.com">
+                </div>
+                <div class="field">
+                    <label for="sub-search">Saved search</label>
+                    <select id="sub-search" name="search_id" required>
+                        <option value="">— loading —</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="sub-threshold">Score threshold</label>
+                    <input type="number" id="sub-threshold" name="score_threshold"
+                           value="70" min="0" max="100">
+                </div>
+                <div class="field field-full">
+                    <button type="submit" class="btn btn-accent">Notify me</button>
+                </div>
+            </form>
+
+            <div id="subscribe-banner" class="subscribe-banner" hidden></div>
         </div>
     </section>
 
@@ -40,13 +88,13 @@
             <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
             <span class="marquee-item">real comp data<span class="sep">·</span></span>
             <span class="marquee-item">percentile ranks<span class="sep">·</span></span>
-            <span class="marquee-item">no vibes<span class="sep">·</span></span>
-            <span class="marquee-item">local-first<span class="sep">·</span></span>
+            <span class="marquee-item">condition-aware<span class="sep">·</span></span>
+            <span class="marquee-item">~2 minute latency<span class="sep">·</span></span>
             <span class="marquee-item">deterministic scoring<span class="sep">·</span></span>
             <span class="marquee-item">real comp data<span class="sep">·</span></span>
             <span class="marquee-item">percentile ranks<span class="sep">·</span></span>
-            <span class="marquee-item">no vibes<span class="sep">·</span></span>
-            <span class="marquee-item">local-first<span class="sep">·</span></span>
+            <span class="marquee-item">condition-aware<span class="sep">·</span></span>
+            <span class="marquee-item">~2 minute latency<span class="sep">·</span></span>
         </div>
     </div>
 
@@ -54,10 +102,15 @@
         <section class="section search-panel reveal" id="search-form">
             <div class="section-head">
                 <div>
-                    <div class="section-eyebrow">step one</div>
-                    <h2>Search the live market.</h2>
+                    <div class="section-eyebrow">step two · test your search</div>
+                    <h2>Try it live before you commit.</h2>
                 </div>
             </div>
+
+            <p class="hero-sub" style="margin-bottom: 28px; max-width: 720px;">
+                Run any keyword to see what kind of listings come back and how they'd score.
+                Useful for tuning your saved searches before subscribing.
+            </p>
 
             <form action="/search" method="post" class="search-form">
                 <div class="field field-wide">
@@ -296,49 +349,6 @@
             </section>
         {% endif %}
     </main>
-
-    <section class="subscribe-section reveal" id="subscribe">
-        <div class="container">
-            <div class="section-head">
-                <div>
-                    <div class="section-eyebrow">notifications</div>
-                    <h2>Get pinged when a saved search has a real deal.</h2>
-                </div>
-            </div>
-
-            <p class="hero-sub" style="margin-bottom: 28px;">
-                Pick a saved search, set a score threshold, leave your email. We email you the moment a listing scores above your bar — typically within 1–2 minutes of it being posted.
-            </p>
-
-            <form id="subscribe-form" class="subscribe-form">
-                <div class="field">
-                    <label for="sub-name">Name (optional)</label>
-                    <input type="text" id="sub-name" name="name" placeholder="Reuben">
-                </div>
-                <div class="field">
-                    <label for="sub-email">Email</label>
-                    <input type="email" id="sub-email" name="email" required
-                           placeholder="you@example.com">
-                </div>
-                <div class="field">
-                    <label for="sub-search">Saved search</label>
-                    <select id="sub-search" name="search_id" required>
-                        <option value="">— loading —</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label for="sub-threshold">Score threshold</label>
-                    <input type="number" id="sub-threshold" name="score_threshold"
-                           value="70" min="0" max="100">
-                </div>
-                <div class="field field-full">
-                    <button type="submit" class="btn">Notify me</button>
-                </div>
-            </form>
-
-            <div id="subscribe-banner" class="subscribe-banner" hidden></div>
-        </div>
-    </section>
 
     <footer class="site-footer">
         <div class="container">

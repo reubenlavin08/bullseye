@@ -24,6 +24,7 @@ import logging
 import time
 from dataclasses import dataclass
 
+from ..appraisal.condition_signals import extract_condition_signals
 from ..appraisal.formula import compute_score
 from ..appraisal.normalizer import normalize_title
 from ..appraisal.worker import _recover_price, drain_queue
@@ -213,7 +214,7 @@ def _process_new_listing(
                     )
         return "unscoreable"
 
-    # Comps + score
+    # Comps + condition signals + score
     search_term = normalize_title(pl.title) or pl.title
     comp = get_comps(
         search_term=search_term,
@@ -222,7 +223,15 @@ def _process_new_listing(
         asking_price=asking,
         category_id=pl.category_id,
     )
-    breakdown = compute_score(asking_price=asking, comp=comp)
+    cond = extract_condition_signals(description)
+    breakdown = compute_score(
+        asking_price=asking,
+        comp=comp,
+        condition_adjustment=cond.score_adjustment,
+        condition_flags=cond.flags_fired,
+        condition_note=cond.note,
+        category_id=pl.category_id,
+    )
 
     note = (
         f"[unscoreable] {breakdown.unscoreable_reason}"
