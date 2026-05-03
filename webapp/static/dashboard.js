@@ -491,6 +491,82 @@
         return "$" + Math.round(p).toLocaleString();
     }
 
+    // --- Comp drawer: shows the actual comp listings behind a score ---
+    //
+    // When the user clicks a comp chip on an appraisal row, we fetch
+    // /api/comps and render the listings (price, title link, location)
+    // in a slide-over panel so they can audit the score themselves.
+
+    async function openCompDrawer(term, source) {
+        let drawer = document.getElementById("comp-drawer");
+        if (!drawer) {
+            drawer = document.createElement("div");
+            drawer.id = "comp-drawer";
+            drawer.className = "comp-drawer";
+            drawer.innerHTML = `
+                <div class="comp-drawer-head">
+                    <span class="comp-drawer-title">comp data</span>
+                    <button class="comp-drawer-close" aria-label="close">×</button>
+                </div>
+                <div class="comp-drawer-meta muted">loading…</div>
+                <div class="comp-drawer-body"></div>`;
+            document.body.appendChild(drawer);
+            drawer.querySelector(".comp-drawer-close").addEventListener("click", () => {
+                drawer.classList.remove("is-open");
+            });
+        }
+        drawer.classList.add("is-open");
+        drawer.querySelector(".comp-drawer-meta").textContent = `loading "${term}" (${source})…`;
+        drawer.querySelector(".comp-drawer-body").innerHTML = "";
+
+        try {
+            const url = `/api/comps?term=${encodeURIComponent(term)}&source=${encodeURIComponent(source)}`;
+            const data = await (await fetch(url)).json();
+            const rows = data.rows || [];
+            if (rows.length === 0) {
+                drawer.querySelector(".comp-drawer-meta").innerHTML =
+                    `<em>No cached comps for "${escapeHtml(term)}" (${source}). The 12h cache may have expired; appraisals on this term will refetch on next poll.</em>`;
+                return;
+            }
+            drawer.querySelector(".comp-drawer-meta").innerHTML =
+                `<strong>${data.sample_size}</strong> comps from <strong>${source}</strong> for ` +
+                `<em>${escapeHtml(term)}</em> · median <strong>$${Math.round(data.median)}</strong> · ` +
+                `mean $${Math.round(data.mean)} · range $${Math.round(data.min)}–$${Math.round(data.max)}`;
+            const max = data.max || 1;
+            const median = data.median || 0;
+            drawer.querySelector(".comp-drawer-body").innerHTML = rows.map((r) => {
+                const pct = (r.price / max) * 100;
+                const nearMed = median && Math.abs(r.price - median) / median < 0.15;
+                const cls = nearMed ? "comp-drawer-row near-median" : "comp-drawer-row";
+                const titleHTML = r.listing_url
+                    ? `<a href="${r.listing_url}" target="_blank" rel="noopener">${escapeHtml(r.title || "(no title)")}</a>`
+                    : escapeHtml(r.title || "(no title)");
+                return `
+                    <div class="${cls}">
+                        <div class="comp-drawer-bar" style="width:${pct.toFixed(1)}%"></div>
+                        <span class="comp-drawer-price">$${Math.round(r.price)}</span>
+                        <span class="comp-drawer-title-cell">${titleHTML}</span>
+                        <span class="comp-drawer-loc">${escapeHtml(r.location || "")}</span>
+                    </div>`;
+            }).join("");
+        } catch (err) {
+            drawer.querySelector(".comp-drawer-meta").textContent = "Failed to load comps: " + err.message;
+        }
+    }
+
+    function setupCompDrawerDelegation() {
+        // Event delegation: comp chips appear/disappear with each
+        // refreshAppraisalFeed re-render, so we attach to the parent.
+        const wrap = document.getElementById("appraisal-feed");
+        if (!wrap) return;
+        wrap.addEventListener("click", (e) => {
+            const chip = e.target.closest(".apr-comp-chip[data-comp-term]");
+            if (!chip) return;
+            e.preventDefault();
+            openCompDrawer(chip.dataset.compTerm, chip.dataset.compSource);
+        });
+    }
+
     async function refreshAppraisalFeed() {
         try {
             // 200 listings keeps a multi-hour history visible. The feed
@@ -507,28 +583,47 @@
             wrap.innerHTML = listings.map((l) => {
                 const ts = l.appraised_at || l.scraped_at;
                 const ago = timeAgo(ts);
+                // Comp summary — count, median, source badge. The
+                // source badge is a clickable chip that opens a side
+                // panel with the actual comp listings (so the user can
+                // see exactly what data drove the score).
+                const compSrc = l.comp_source || null;
+                const compChip = (compSrc && l.comp_search_term)
+                    ? `<button class="apr-comp-chip apr-src-${compSrc}" type="button"
+                              data-comp-term="${escapeHtml(l.comp_search_term)}"
+                              data-comp-source="${compSrc}"
+                              title="Click to see the ${l.comp_sample_size ?? '?'} comp listings used for this score">${
+                        compSrc === 'ebay' ? 'eBay' : 'FB Mkt'
+                      } · n=${l.comp_sample_size ?? '?'} · med $${l.comp_median != null ? Math.round(l.comp_median) : '?'}</button>`
+                    : (l.comp_sample_size
+                        ? `<span class="apr-comp-chip">n=${l.comp_sample_size} · med $${l.comp_median != null ? Math.round(l.comp_median) : '?'}</span>`
+                        : '');
+
                 const tail = l.rejected
                     ? `<span class="apr-tail bad">rejected: ${escapeHtml(l.rejection_reason || "n/a")}</span>`
                     : (l.deal_score != null
-                        ? `<span class="apr-tail">${escapeHtml(l.appraisal_note || "")} · n=${l.comp_sample_size ?? "?"} · fair $${l.fair_value != null ? Math.round(l.fair_value) : "?"}</span>`
+                        ? `<span class="apr-tail">${escapeHtml(l.appraisal_note || "")} · fair $${l.fair_value != null ? Math.round(l.fair_value) : "?"}</span>`
                         : `<span class="apr-tail muted">${escapeHtml(l.appraisal_note || "no score")}</span>`);
                 const href = l.listing_url || "#";
                 return `
-                    <a class="apr-row apr-row-${l.status}" href="${href}" target="_blank" rel="noopener">
-                        ${scoreBadge(l.deal_score, l.status)}
+                    <div class="apr-row apr-row-${l.status}">
+                        <a class="apr-link" href="${href}" target="_blank" rel="noopener">
+                            ${scoreBadge(l.deal_score, l.status)}
+                        </a>
                         <div class="apr-main">
                             <div class="apr-title-row">
-                                <span class="apr-title">${escapeHtml(l.title || "")}</span>
+                                <a class="apr-title" href="${href}" target="_blank" rel="noopener">${escapeHtml(l.title || "")}</a>
                                 ${statusBadge(l.status)}
                             </div>
                             <div class="apr-meta">
                                 <span class="apr-kw">${escapeHtml(l.keyword || "—")}</span>
                                 <span class="apr-price">${fmtPrice(l.price)}</span>
                                 <span class="apr-ago">${ago}</span>
+                                ${compChip}
                                 ${tail}
                             </div>
                         </div>
-                    </a>
+                    </div>
                 `;
             }).join("");
         } catch (err) {
@@ -571,6 +666,7 @@
         setupTailTabs();
         setupPerWatchSort();
         setupAppraisalFilters();
+        setupCompDrawerDelegation();
 
         refreshSummary();
         refreshEvents();

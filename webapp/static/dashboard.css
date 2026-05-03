@@ -506,6 +506,146 @@
 .apr-tail.bad { color: var(--bad); }
 .apr-tail.muted { opacity: 0.7; }
 
+/* Comp chip on each appraisal row — clickable to open the drawer */
+.apr-comp-chip {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px dashed var(--border);
+    background: rgba(255, 252, 244, 0.6);
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition: all 120ms var(--ease);
+}
+button.apr-comp-chip { font: inherit; font-size: 9px; }
+.apr-comp-chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    border-style: solid;
+}
+.apr-comp-chip.apr-src-ebay {
+    color: #1d6042;
+    border-color: rgba(29, 96, 66, 0.4);
+    background: rgba(29, 96, 66, 0.06);
+}
+.apr-comp-chip.apr-src-ebay:hover {
+    color: #0f3d2a;
+    border-color: rgba(29, 96, 66, 0.8);
+    background: rgba(29, 96, 66, 0.10);
+}
+.apr-comp-chip.apr-src-marketplace {
+    color: var(--fg-muted);
+}
+
+/* Make rows still feel link-like — title and score badge are
+   anchors; the rest of the row is plain text now since clicking the
+   comp chip should NOT open the FB listing. */
+.apr-link, .apr-title { color: inherit; text-decoration: none; }
+.apr-link { display: contents; }
+.apr-title:hover { color: var(--accent); }
+
+/* ---- Comp drawer (slide-over showing comp listings) ---- */
+.comp-drawer {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(560px, 92vw);
+    background: var(--bg);
+    border-left: 1px solid var(--border-strong);
+    box-shadow: -8px 0 24px rgba(63, 23, 24, 0.12);
+    transform: translateX(110%);
+    transition: transform 280ms var(--ease);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.comp-drawer.is-open { transform: translateX(0); }
+
+.comp-drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 20px 12px;
+    border-bottom: 1px dashed var(--border);
+    background: var(--bg-elev);
+}
+.comp-drawer-title {
+    font-family: var(--font-slab);
+    font-size: 16px;
+    color: var(--fg);
+}
+.comp-drawer-close {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 28px; height: 28px;
+    font-size: 18px;
+    color: var(--fg-muted);
+    cursor: pointer;
+    line-height: 1;
+}
+.comp-drawer-close:hover { border-color: var(--accent); color: var(--accent); }
+
+.comp-drawer-meta {
+    padding: 12px 20px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    border-bottom: 1px dashed var(--border);
+}
+.comp-drawer-meta strong { color: var(--fg); font-weight: 700; }
+.comp-drawer-meta em { color: var(--accent); font-style: normal; }
+
+.comp-drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 14px 20px;
+}
+
+.comp-drawer-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 56px 1fr 100px;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 6px;
+    border-bottom: 1px dashed rgba(63, 23, 24, 0.10);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+.comp-drawer-bar {
+    position: absolute;
+    left: 0; bottom: 0; height: 2px;
+    background: rgba(194, 65, 12, 0.18);
+}
+.comp-drawer-row.near-median .comp-drawer-bar { background: rgba(93, 107, 58, 0.45); }
+.comp-drawer-price {
+    font-family: var(--font-slab);
+    font-size: 13px;
+    color: var(--fg);
+}
+.comp-drawer-row.near-median .comp-drawer-price { color: var(--accent); }
+.comp-drawer-title-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-muted);
+}
+.comp-drawer-title-cell a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+}
+.comp-drawer-title-cell a:hover { text-decoration-style: solid; }
+.comp-drawer-loc {
+    color: var(--fg-dim);
+    font-size: 9px;
+    text-align: right;
+}
+
 /* ---------- 5. Per-watch table ---------- */
 
 .per-watch-table-wrap {

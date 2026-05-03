@@ -848,6 +848,7 @@ def api_dashboard_appraisal_feed():
                           l.scraped_at, l.appraised_at,
                           l.notified, l.appraised,
                           l.comp_sample_size, l.comp_median,
+                          l.comp_search_term, l.comp_source,
                           us.keyword
                    FROM listings l
                    LEFT JOIN user_searches us ON us.id = l.search_id
@@ -860,7 +861,7 @@ def api_dashboard_appraisal_feed():
                 (lid, title, price, score, fair, rejected, rej_reason,
                  appraisal_note, listing_url, photo_url,
                  scraped_at, appraised_at, notified, appraised,
-                 comp_n, comp_median, keyword) = r
+                 comp_n, comp_median, comp_term, comp_source, keyword) = r
 
                 # Status classification — the row's color tag in the UI.
                 if rejected:
@@ -893,6 +894,8 @@ def api_dashboard_appraisal_feed():
                     "appraised": bool(appraised),
                     "comp_sample_size": int(comp_n) if comp_n is not None else None,
                     "comp_median": float(comp_median) if comp_median is not None else None,
+                    "comp_search_term": comp_term,
+                    "comp_source": comp_source,
                     "keyword": keyword,
                     "status": status,
                 })
