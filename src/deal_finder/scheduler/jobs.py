@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from ..appraisal.condition_signals import extract_condition_signals
 from ..appraisal.formula import compute_score
 from ..appraisal.normalizer import normalize_title
+from ..appraisal.secondary_check import should_verify, verify_listing
 from ..appraisal.worker import _recover_price, drain_queue
 from ..comps.marketplace import get_comps
 from ..db.connection import get_conn
@@ -534,11 +535,61 @@ def _process_new_listing(
         category_id=pl.category_id,
     )
 
+    # Secondary LLM check for anomalously high scores. Catches things
+    # the statistical scorer can't see: obfuscated rentals ('$40 car
+    # r3ntal'), financing-as-price, parts-only listings, replicas/
+    # toys priced against the real thing, scams.
+    secondary_verdict = "skipped"
+    secondary_concern: str | None = None
+    if not breakdown.unscoreable and should_verify(
+        deal_score=breakdown.deal_score,
+        confidence_label=breakdown.confidence_label,
+    ):
+        try:
+            check = verify_listing(
+                title=pl.title,
+                description=description,
+                asking_price=asking,
+                comp_median=comp.median,
+                comp_sample_size=comp.sample_size,
+                deal_score=breakdown.deal_score,
+                confidence_label=breakdown.confidence_label,
+            )
+            secondary_verdict = check.verdict
+            secondary_concern = check.concern
+            logger.info(
+                "%s 2ND-CHECK %s (%s) %.1fs | %s",
+                sl.id, check.verdict.upper(),
+                check.concern[:60] if check.concern else "no concern",
+                check.elapsed_s, pl.title[:50],
+            )
+            record_event(
+                "secondary_check",
+                listing_id=sl.id,
+                verdict=check.verdict,
+                concern=check.concern,
+                confidence=check.confidence,
+                elapsed_ms=int(check.elapsed_s * 1000),
+                deal_score=breakdown.deal_score,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("secondary check raised (continuing): %s", e)
+
+    # 'suspect' verdict → reject the listing so it never emails. Saved
+    # as a normal rejection so the dashboard's funnel reflects it.
+    rejected_by_llm = secondary_verdict == "suspect"
+
     note = (
         f"[unscoreable] {breakdown.unscoreable_reason}"
         if breakdown.unscoreable
         else f"[{breakdown.confidence_label} ±{breakdown.confidence_pm}]"
     )
+    if rejected_by_llm and secondary_concern:
+        note += f" [LLM-suspect: {secondary_concern}]"
+    elif secondary_verdict == "uncertain" and secondary_concern:
+        note += f" [LLM-uncertain: {secondary_concern}]"
+    elif secondary_verdict == "legit":
+        note += " [LLM-verified]"
 
     with get_conn() as conn:
         with conn:
@@ -557,11 +608,29 @@ def _process_new_listing(
                 appraisal_model="formula-only",
                 breakdown=breakdown,
             )
+            if rejected_by_llm:
+                # Mark rejected after the appraisal write so the score is
+                # still visible, but the email pipeline skips it.
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE listings SET
+                              rejected = TRUE,
+                              rejection_reason = %s
+                           WHERE id = %s""",
+                        (f"llm-suspect: {secondary_concern or 'flagged'}", sl.id),
+                    )
 
     if breakdown.unscoreable:
         logger.info("%s unscoreable: %s | %s",
                     sl.id, breakdown.unscoreable_reason, pl.title[:60])
         return "unscoreable"
+
+    if rejected_by_llm:
+        logger.info(
+            "%s LLM-REJECTED (score=%d, %s) | %s",
+            sl.id, breakdown.deal_score, secondary_concern, pl.title[:60],
+        )
+        return "rejected"
 
     logger.info(
         "%s SCORED %d (conf %s±%d, n=%d) | %s",
