@@ -41,6 +41,7 @@ _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "src"))
 
 from deal_finder.scraper.facebook import (  # noqa: E402
+    FacebookRateLimited,
     SearchParams,
     get_default_client as get_search_client,
 )
@@ -217,6 +218,24 @@ def search():
             price_min=price_min,
             price_max=price_max,
         ))
+    except FacebookRateLimited as e:
+        # Hard-stop fence is active — don't burn a search request on
+        # a known-blocked endpoint. Tell the user clearly what's
+        # happening + when it'll clear.
+        mins = max(1, int(e.seconds_remaining // 60))
+        return render_template(
+            "index.html",
+            defaults=_form_to_defaults(request.form),
+            results=None,
+            meta=None,
+            error=(
+                f"Test paused — FB rate-limit cooldown active "
+                f"(~{int(e.seconds_remaining)}s / ~{mins} min remaining). "
+                f"The background scheduler shares your IP's FB quota with "
+                f"this Test Appraiser. Wait for cooldown to clear (see "
+                f"countdown on /dashboard) and try again."
+            ),
+        ), 503
     except Exception as e:  # noqa: BLE001 -- surface anything to the UI
         return render_template(
             "index.html",
@@ -1854,6 +1873,16 @@ def appraise(listing_id: str):
     # 1) Fetch detail (description, seller, photos)
     try:
         detail = get_detail_client().fetch(listing_id)
+    except FacebookRateLimited as e:
+        return jsonify({
+            "ok": False,
+            "error": (
+                f"FB rate-limit cooldown active (~{int(e.seconds_remaining)}s "
+                f"remaining). Try again after the countdown clears."
+            ),
+            "rate_limited": True,
+            "seconds_remaining": int(e.seconds_remaining),
+        }), 503
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"detail fetch: {e}"}), 502
     if not detail.description:

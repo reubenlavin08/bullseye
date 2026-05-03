@@ -64,11 +64,14 @@ SECONDARY_CHECK_MODEL = os.environ.get(
 # the budget on relevant listings without wasting tokens on stuff far
 # below threshold.
 #
-#   - score >= LLM_CLOUD_FORCE_SCORE (default 92)
-#       → ALWAYS escalate (when budget remains). 92 is comfortably
-#         above the typical email threshold of 90, so any listing
-#         crossing this is very likely about to land in inbox. Worth
-#         one cloud token of verification.
+#   - score >= LLM_CLOUD_FORCE_SCORE (default 90)
+#       → ALWAYS escalate (when budget remains). 90 = the typical
+#         email threshold, so any listing crossing this would be
+#         emailed if not stopped. Per user request: verify every
+#         listing about to email so 'stuff which sucks because the
+#         listing got wrong' doesn't make it to inbox. Budget cap
+#         (5/day) naturally prevents runaway; if exhausted, Tier-1
+#         alone gates the email.
 #
 #   - Tier-1 was 'uncertain' AND score >= 90
 #       → escalate (the local model wasn't sure AND the listing IS
@@ -81,7 +84,7 @@ SECONDARY_CHECK_MODEL = os.environ.get(
 #
 # When daily budget is exhausted, all triggers silently disable until
 # midnight; Tier-1 still runs free on every score-≥85 listing.
-LLM_CLOUD_FORCE_SCORE = int(os.environ.get("LLM_CLOUD_FORCE_SCORE", "92"))
+LLM_CLOUD_FORCE_SCORE = int(os.environ.get("LLM_CLOUD_FORCE_SCORE", "90"))
 LLM_CLOUD_LOWCONF_SCORE = int(os.environ.get("LLM_CLOUD_LOWCONF_SCORE", "90"))
 LLM_CLOUD_UNCERTAIN_MIN_SCORE = int(os.environ.get("LLM_CLOUD_UNCERTAIN_MIN_SCORE", "90"))
 

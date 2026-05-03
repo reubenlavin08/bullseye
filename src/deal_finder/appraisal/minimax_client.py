@@ -46,12 +46,13 @@ logger = logging.getLogger(__name__)
 # 2026-05. The /v1/chat/completions path is OpenAI-compatible.
 DEFAULT_BASE_URL = "https://api.minimax.io/v1"
 DEFAULT_MODEL = "MiniMax-Text-01"
-# Conservative daily budget. With ~46 active watches polling every
-# ~15 min and only escalating ON THE TIGHTEST trigger conditions
-# (see secondary_check.py), we expect 0-3 escalations/day in normal
-# operation. 5 leaves headroom for a busy day; below that and we'd
-# start dropping legitimate verifications.
-DEFAULT_DAILY_BUDGET = 5
+# Daily budget cap. Bumped from 5 → 20 after confirming actual cost:
+# MiniMax-Text-01 charges $0.20/M input + $1.10/M output. Our typical
+# prompt is ~700 input + 80 output tokens per call, so per-call cost
+# is ~$0.00023. At 20 calls/day that's $0.005/day, $0.15/month — well
+# under any reasonable budget concern. The cap exists as a runaway
+# safeguard, not a cost control.
+DEFAULT_DAILY_BUDGET = 20
 DEFAULT_TIMEOUT_S = 30
 
 

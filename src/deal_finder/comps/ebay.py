@@ -16,6 +16,7 @@ fall back to Marketplace comps without crashing.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 from ..db.comps import CompStats, fetch_stats, insert_comps
@@ -31,6 +32,60 @@ logger = logging.getLogger(__name__)
 SOURCE = "ebay"
 DEFAULT_TTL_SECONDS = 12 * 3600  # same as marketplace, ground-truth lasts longer
                                   # but keep cadence aligned for now.
+
+# Platform normalization factor for eBay prices. eBay listings are
+# systematically more expensive than FB Marketplace asking-prices for
+# the same item (shipping included, more new items, retail-style
+# sellers, buyer-protection premium). Multiplying every eBay price by
+# this factor before computing percentile rank brings the eBay
+# distribution into Marketplace's scale, giving more accurate scores
+# without losing eBay's better product-identity matching.
+#
+# Tuning: empirical observation shows eBay router/printer/monitor
+# prices ~2-3x Marketplace medians for the same product. So 0.5-0.8
+# is a reasonable range. Start at 0.85 (modest 15% reduction) and
+# tune downward if scores are still inflated.
+#
+# Set EBAY_PRICE_NORMALIZATION=1.0 to disable (treat eBay prices
+# as-is). Applied at READ time so retuning takes effect on next
+# appraisal — no cache rebuild required.
+def _normalization_factor() -> float:
+    try:
+        f = float(os.environ.get("EBAY_PRICE_NORMALIZATION", "0.85"))
+    except (TypeError, ValueError):
+        f = 0.85
+    # Clamp to sane range so a typo can't turn off scoring entirely.
+    return max(0.10, min(2.0, f))
+
+
+def _scale_comp_stats(stats: CompStats, factor: float) -> CompStats:
+    """Return a new CompStats with all price fields multiplied by
+    `factor`. The anchor-based percentile rank in formula.py uses
+    minimum/p10/q1/median/q3/p90/maximum, so all of those scale.
+    Trimmed and outlier counts/sample_size pass through unchanged.
+
+    Idempotent at factor=1.0: returns the input unchanged.
+    """
+    if factor == 1.0:
+        return stats
+
+    def _s(v: float | None) -> float | None:
+        return v * factor if v is not None else None
+
+    # Construct a new CompStats dataclass instance with same shape.
+    # We replicate every field so this stays robust if CompStats grows.
+    from dataclasses import fields as _fields, replace
+    scalable = {
+        "median", "mean", "minimum", "maximum",
+        "trimmed_median", "trimmed_mean",
+        "p10", "q1", "q3", "p90",
+        "iqr",
+    }
+    overrides = {}
+    for fld in _fields(stats):
+        if fld.name in scalable:
+            overrides[fld.name] = _s(getattr(stats, fld.name))
+    return replace(stats, **overrides)
 
 # Singleflight coalescer (same pattern as comps/marketplace.py).
 _inflight_lock = threading.Lock()
@@ -67,6 +122,7 @@ def get_ebay_comps(
         return CompStats(search_term=search_term, source=SOURCE, sample_size=0)
 
     # Try cache first (same shape as marketplace path)
+    factor = _normalization_factor()
     if not force_refresh:
         with get_conn() as conn:
             cached = fetch_stats(
@@ -77,10 +133,10 @@ def get_ebay_comps(
             )
             if cached.fresh and cached.sample_size > 0:
                 logger.debug(
-                    "ebay-comp cache hit term=%r n=%d median=%.2f",
-                    search_term, cached.sample_size, cached.median or 0,
+                    "ebay-comp cache hit term=%r n=%d median=%.2f factor=%.2f",
+                    search_term, cached.sample_size, cached.median or 0, factor,
                 )
-                return cached
+                return _scale_comp_stats(cached, factor)
 
     # Cache miss → coalesce + fetch
     key = _coalesce_key(search_term)
@@ -157,12 +213,16 @@ def get_ebay_comps(
             )
 
     with get_conn() as conn:
-        return fetch_stats(
+        stats = fetch_stats(
             conn, search_term, SOURCE,
             ttl_seconds=ttl_seconds,
             asking_price=asking_price,
             target_text=target_text if use_embedding_filter else None,
         )
+    # Scale eBay's distribution down to Marketplace-comparable range
+    # via EBAY_PRICE_NORMALIZATION (default 0.85). Done at READ time
+    # so retuning takes effect on next appraisal.
+    return _scale_comp_stats(stats, factor)
 
 
 def get_best_comps(
@@ -174,51 +234,53 @@ def get_best_comps(
 ) -> CompStats:
     """Get the best comp data for an FB Marketplace target listing.
 
-    Decision rule (REVISED 2026-05 after observing score skew):
-      * Marketplace sample >= MIN_MARKETPLACE_PRIMARY (default 8)
-        → use Marketplace asking-prices (same-platform, fair comparison)
-      * else (sparse Marketplace data, e.g. niche keyword)
-        → fall back to eBay active listings; the platform mismatch is
-          worth absorbing for a usable signal vs no signal at all
+    Decision rule: prefer eBay (better product matching), fall back to
+    Marketplace if eBay is sparse.
 
-    Why we don't prefer eBay primary even though it has more data:
-      eBay listings are systematically more expensive than Marketplace
-      asking (shipping included, more new items, polished listings,
-      retail-style sellers). Comparing a Marketplace listing's price
-      against an eBay distribution puts it in eBay's bottom percentile
-      → inflated deal_score. e.g. a $10 Marketplace router scored 91
-      because eBay routers median $32; against Marketplace comps ($5-15
-      typical) the same listing would score in the middle of the
-      distribution. Unfair to the user — they'd get bombarded with
-      'great deals' that are just average Marketplace prices.
+    Why eBay-primary even though scores skew higher:
+      User wants product-match accuracy over distribution shape. eBay
+      listings include brand/model/condition explicitly, so when we
+      search 'Dlink R15 Router' on eBay we get actual Dlink R15
+      Router listings — not 'random Marketplace listings whose title
+      happens to contain Dlink'. The slight upward skew in scores is
+      acceptable because the underlying comp set is a far more
+      faithful comparison. User can raise their score threshold (e.g.
+      from 90 to 95) to filter out the 'merely average' tier.
 
-      Marketplace-vs-Marketplace is the right comparison for an FB
-      Marketplace target. eBay only when Marketplace has nothing.
+    Trade-off acknowledged:
+      eBay listings tend to be ~20-30% higher than Marketplace asking
+      for the same item (shipping, new items, retail-style sellers).
+      A Marketplace target will land in eBay's lower percentiles
+      → inflated deal_score. The trade is: better product identity
+      match (signal) at the cost of less spread (precision in the
+      tails). Tune via score_threshold if it becomes noisy.
+
+    Tunables:
+      MIN_EBAY_PRIMARY (default 5) — minimum eBay sample to use it
+      as primary. Below that, we fall back to Marketplace which
+      tends to have more samples for non-branded niche keywords.
     """
-    MIN_MARKETPLACE_PRIMARY = 8
+    MIN_EBAY_PRIMARY = int(
+        os.environ.get("MIN_EBAY_PRIMARY_SAMPLE", "5")
+    )
 
     # Lazy import to avoid circular dep
     from .marketplace import get_comps as get_marketplace_comps
 
-    mp_stats = get_marketplace_comps(
-        search_term=search_term,
-        lat=49.2827, lng=-123.1207, radius_km=1500,
-        asking_price=asking_price,
-        target_text=target_text,
-        use_embedding_filter=use_embedding_filter,
-    )
-    if mp_stats.sample_size >= MIN_MARKETPLACE_PRIMARY:
-        return mp_stats
-
-    # Sparse Marketplace data — try eBay as fallback. Better than
-    # 'unscoreable' for niche keywords where Marketplace can't find
-    # enough comps.
     ebay_stats = get_ebay_comps(
         search_term=search_term,
         asking_price=asking_price,
         target_text=target_text,
         use_embedding_filter=use_embedding_filter,
     )
-    if ebay_stats.sample_size >= mp_stats.sample_size:
+    if ebay_stats.sample_size >= MIN_EBAY_PRIMARY:
         return ebay_stats
-    return mp_stats
+
+    # Sparse eBay data — fall back to Marketplace asking-prices.
+    return get_marketplace_comps(
+        search_term=search_term,
+        lat=49.2827, lng=-123.1207, radius_km=1500,
+        asking_price=asking_price,
+        target_text=target_text,
+        use_embedding_filter=use_embedding_filter,
+    )
