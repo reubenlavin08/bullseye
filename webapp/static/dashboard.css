@@ -540,6 +540,30 @@ button.apr-comp-chip { font: inherit; font-size: 9px; }
     color: var(--fg-muted);
 }
 
+/* Distance pill — quick visual cue when something's outside radius. */
+.apr-dist {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(63, 23, 24, 0.06);
+    color: var(--fg-muted);
+    white-space: nowrap;
+    cursor: help;
+}
+.apr-dist-bad {
+    background: rgba(154, 42, 42, 0.12);
+    color: var(--bad);
+    font-weight: 700;
+}
+.apr-dist-unknown {
+    background: rgba(184, 121, 31, 0.10);
+    color: var(--warn);
+    font-style: italic;
+}
+
 /* Make rows still feel link-like — title and score badge are
    anchors; the rest of the row is plain text now since clicking the
    comp chip should NOT open the FB listing. */

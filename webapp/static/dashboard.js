@@ -618,6 +618,9 @@
                             <div class="apr-meta">
                                 <span class="apr-kw">${escapeHtml(l.keyword || "—")}</span>
                                 <span class="apr-price">${fmtPrice(l.price)}</span>
+                                ${l.distance_km != null
+                                    ? `<span class="apr-dist ${l.watch_radius_km && l.distance_km > l.watch_radius_km ? 'apr-dist-bad' : ''}" title="${escapeHtml(l.seller_location || '')} → distance from watch home (radius ${l.watch_radius_km ?? '?'}km)">${l.distance_km}km</span>`
+                                    : (l.seller_location ? `<span class="apr-dist apr-dist-unknown" title="couldn't geocode ‘${escapeHtml(l.seller_location)}’">${escapeHtml(l.seller_location)}</span>` : '')}
                                 <span class="apr-ago">${ago}</span>
                                 ${compChip}
                                 ${tail}

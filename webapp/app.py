@@ -849,7 +849,9 @@ def api_dashboard_appraisal_feed():
                           l.notified, l.appraised,
                           l.comp_sample_size, l.comp_median,
                           l.comp_search_term, l.comp_source,
-                          us.keyword
+                          us.keyword,
+                          l.seller_location,
+                          us.latitude, us.longitude, us.radius_km
                    FROM listings l
                    LEFT JOIN user_searches us ON us.id = l.search_id
                    WHERE {where_sql}
@@ -857,11 +859,29 @@ def api_dashboard_appraisal_feed():
                    LIMIT %s""",
                 (*params, limit),
             )
+            from deal_finder.db.geo import geocode_city, haversine_km
             for r in cur.fetchall():
                 (lid, title, price, score, fair, rejected, rej_reason,
                  appraisal_note, listing_url, photo_url,
                  scraped_at, appraised_at, notified, appraised,
-                 comp_n, comp_median, comp_term, comp_source, keyword) = r
+                 comp_n, comp_median, comp_term, comp_source, keyword,
+                 seller_location, watch_lat, watch_lng, watch_radius) = r
+
+                # Compute distance from the watch's home to the
+                # listing's geocoded city centroid. Cheap — geocode_city
+                # is DB-cached and unique cities repeat heavily across
+                # the feed. None when we can't resolve location.
+                distance_km = None
+                if seller_location and watch_lat is not None and watch_lng is not None:
+                    coords = geocode_city(seller_location)
+                    if coords is not None:
+                        distance_km = round(
+                            haversine_km(
+                                float(watch_lat), float(watch_lng),
+                                coords[0], coords[1],
+                            ),
+                            1,
+                        )
 
                 # Status classification — the row's color tag in the UI.
                 if rejected:
@@ -898,6 +918,9 @@ def api_dashboard_appraisal_feed():
                     "comp_source": comp_source,
                     "keyword": keyword,
                     "status": status,
+                    "seller_location": seller_location,
+                    "distance_km": distance_km,
+                    "watch_radius_km": int(watch_radius) if watch_radius is not None else None,
                 })
 
     return jsonify({"listings": rows, "threshold": threshold, "filter": filt})

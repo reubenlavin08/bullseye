@@ -88,17 +88,18 @@ def _passes_watch_bounds(
             return False, f"price ${price:.0f} < min ${price_min}"
         if price_max is not None and price > price_max:
             return False, f"price ${price:.0f} > max ${price_max}"
-    # Distance gate — haversine on the geocoded city center, with the
-    # same soft buffer poll_search uses (max(r+8, r*1.3)).
+    # Distance gate — strict radius (no soft buffer). Was previously
+    # max(r+8, r*1.3) to absorb city-centroid slop, but that let
+    # Burnaby (~12 km) through a 5 km user radius. Hard enforcement
+    # matches what poll_search does pre-appraisal.
     if not radius_km or not seller_location:
         return True, None
     coords = geocode_city(seller_location)
     if coords is None:
         return True, None  # fail open on geocode error
     dist = haversine_km(home_lat, home_lng, coords[0], coords[1])
-    soft = max(float(radius_km) + 8.0, float(radius_km) * 1.3)
-    if dist > soft:
-        return False, f"{dist:.0f} km > {soft:.0f} km soft radius"
+    if dist > float(radius_km):
+        return False, f"{dist:.0f} km > {radius_km} km radius"
     return True, None
 
 

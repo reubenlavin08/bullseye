@@ -146,7 +146,16 @@ def poll_search(search_id: int) -> PollResult:
         # listings while still rejecting Burnaby / Surrey / Nanaimo.
         # Formula: max(radius + 8 km, 1.3 × radius) so the buffer
         # scales with the requested radius for larger searches.
-        soft_radius = max(radius + 8.0, radius * 1.3)
+        # Hard radius: previously we used a soft-buffer
+        # (max(radius+8, radius*1.3)) to absorb city-centroid vs
+        # actual-address slop. Real-world failure mode: Burnaby's
+        # geocode (~12 km from Vancouver) was sneaking inside a 5 km
+        # user radius's 13 km soft-buffer. User wants strict
+        # enforcement — radius means radius. The trade-off is some
+        # legitimate listings on the edge of the user's actual city
+        # (where the city centroid is distant) get dropped, but that's
+        # better than out-of-range emails.
+        soft_radius = radius
         for sl in new_listings:
             if not sl.seller_location:
                 kept.append(sl)
@@ -353,7 +362,16 @@ def _process_watch_bucket(
         home_lat = float(watch["latitude"])
         home_lng = float(watch["longitude"])
         radius = float(watch["radius_km"])
-        soft_radius = max(radius + 8.0, radius * 1.3)
+        # Hard radius: previously we used a soft-buffer
+        # (max(radius+8, radius*1.3)) to absorb city-centroid vs
+        # actual-address slop. Real-world failure mode: Burnaby's
+        # geocode (~12 km from Vancouver) was sneaking inside a 5 km
+        # user radius's 13 km soft-buffer. User wants strict
+        # enforcement — radius means radius. The trade-off is some
+        # legitimate listings on the edge of the user's actual city
+        # (where the city centroid is distant) get dropped, but that's
+        # better than out-of-range emails.
+        soft_radius = radius
         for sl in new_listings:
             if not sl.seller_location:
                 kept.append(sl)

@@ -321,28 +321,35 @@ def test_should_NOT_escalate_when_uncertain_below_min_score():
     assert "sufficient" in reason
 
 
-def test_should_escalate_when_score_at_force_threshold():
-    """Score >= LLM_CLOUD_FORCE_SCORE (97) always escalates regardless
-    of Tier 1's verdict. Top-tier outliers are worth one token."""
+def test_should_escalate_at_force_threshold():
+    """Score == LLM_CLOUD_FORCE_SCORE always escalates regardless of
+    Tier 1's verdict. Listings at this score are about to email; one
+    token of cloud verification is worth it."""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     with patch.object(minimax_client, "available", return_value=True), \
          patch.object(minimax_client, "daily_budget_remaining", return_value=10):
         should, _ = sc._should_escalate_to_cloud(
-            tier1_verdict="legit", deal_score=97, confidence_label="high",
+            tier1_verdict="legit",
+            deal_score=sc.LLM_CLOUD_FORCE_SCORE,
+            confidence_label="high",
         )
     assert should
 
 
-def test_should_NOT_escalate_at_high_score_below_force():
-    """Score=95 (under 97 force-threshold), tier1=legit → trust tier1.
-    The old logic would escalate here, but we tightened it."""
+def test_should_NOT_escalate_below_force_threshold_with_legit_tier1():
+    """Score just below LLM_CLOUD_FORCE_SCORE + tier1=legit → trust
+    tier1, save the cloud token. (The other triggers — uncertain,
+    low-conf — would still fire above their own thresholds; this
+    test is for the 'legit' branch.)"""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     with patch.object(minimax_client, "available", return_value=True), \
          patch.object(minimax_client, "daily_budget_remaining", return_value=10):
         should, _ = sc._should_escalate_to_cloud(
-            tier1_verdict="legit", deal_score=95, confidence_label="high",
+            tier1_verdict="legit",
+            deal_score=sc.LLM_CLOUD_FORCE_SCORE - 1,
+            confidence_label="high",
         )
     assert not should
 
@@ -361,15 +368,18 @@ def test_should_escalate_low_conf_high_score_when_tier1_uncertain():
 
 
 def test_should_NOT_escalate_low_conf_when_tier1_legit():
-    """Score 92 + low conf + tier1=LEGIT → don't escalate. Tier 1's
-    confident yes-vote on a high-score-but-low-statistical-confidence
-    listing is enough — saves a token."""
+    """Score below FORCE + low conf + tier1=LEGIT → don't escalate.
+    Tier 1's confident yes-vote on a high-score-but-low-statistical-
+    confidence listing is enough; saves a token. (Use FORCE-1 so the
+    test stays correct as we tune thresholds.)"""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     with patch.object(minimax_client, "available", return_value=True), \
          patch.object(minimax_client, "daily_budget_remaining", return_value=10):
         should, reason = sc._should_escalate_to_cloud(
-            tier1_verdict="legit", deal_score=92, confidence_label="low",
+            tier1_verdict="legit",
+            deal_score=sc.LLM_CLOUD_FORCE_SCORE - 1,
+            confidence_label="low",
         )
     assert not should
     assert "sufficient" in reason

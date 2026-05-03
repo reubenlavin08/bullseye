@@ -52,28 +52,36 @@ SECONDARY_CHECK_MODEL = os.environ.get(
 )
 
 # Cloud escalation thresholds — when do we promote a Tier-1 (Ollama)
-# verdict to a Tier-2 (MiniMax cloud) check? Tuned for MAX TOKEN
-# CONSERVATION:
+# verdict to a Tier-2 (MiniMax cloud) check?
 #
-#   - score >= LLM_CLOUD_FORCE_SCORE (default 97)
-#       → escalate ONLY when score is in the top-tier "must be sure"
-#         range. 97 is paranoid territory — anything above this is a
-#         very-good-deal that's worth one cloud token to verify.
+# User intent: 5 cloud calls/day, spent on the listings most likely to
+# email them ("really high-scoring items, to make sure I'm not being
+# emailed on stuff which sucks because the listing got wrong").
+#
+# Strategy: bias spend toward listings that WILL email if not stopped.
+# The hard 5/day cap (MINIMAX_DAILY_BUDGET) is the firm safeguard;
+# trigger thresholds are tuned to be aggressive ENOUGH to actually use
+# the budget on relevant listings without wasting tokens on stuff far
+# below threshold.
+#
+#   - score >= LLM_CLOUD_FORCE_SCORE (default 92)
+#       → ALWAYS escalate (when budget remains). 92 is comfortably
+#         above the typical email threshold of 90, so any listing
+#         crossing this is very likely about to land in inbox. Worth
+#         one cloud token of verification.
 #
 #   - Tier-1 was 'uncertain' AND score >= 90
-#       → escalate (the model couldn't decide AND the listing is
-#         already high-score enough to email). If score < 90 we don't
-#         care about uncertain — it won't cross threshold anyway.
+#       → escalate (the local model wasn't sure AND the listing IS
+#         high-score enough to email). If score < 90 we don't care
+#         about uncertain — wouldn't email anyway.
 #
 #   - score >= 90 AND confidence='low' AND Tier-1 verdict != 'legit'
-#       → escalate (sparse-data + high-score + Tier-1 had any doubt
-#         is the classic false-positive zone)
+#       → escalate (sparse-data + high-score + any Tier-1 doubt is
+#         the classic false-positive zone)
 #
-# Anything else: trust Tier-1's verdict, save the cloud token.
-#
-# With these defaults the cloud LLM realistically fires 0-3x/day even
-# under heavy poll volume (>300 listings/day appraised).
-LLM_CLOUD_FORCE_SCORE = int(os.environ.get("LLM_CLOUD_FORCE_SCORE", "97"))
+# When daily budget is exhausted, all triggers silently disable until
+# midnight; Tier-1 still runs free on every score-≥85 listing.
+LLM_CLOUD_FORCE_SCORE = int(os.environ.get("LLM_CLOUD_FORCE_SCORE", "92"))
 LLM_CLOUD_LOWCONF_SCORE = int(os.environ.get("LLM_CLOUD_LOWCONF_SCORE", "90"))
 LLM_CLOUD_UNCERTAIN_MIN_SCORE = int(os.environ.get("LLM_CLOUD_UNCERTAIN_MIN_SCORE", "90"))
 
