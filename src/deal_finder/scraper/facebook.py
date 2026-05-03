@@ -117,15 +117,96 @@ class SearchPage:
 
 # --- Rate limiter ---------------------------------------------------------
 
+class FacebookRateLimited(Exception):
+    """Raised by the rate gate when a process-wide block is in effect.
+
+    Carries the seconds-until-unblock so the caller can decide whether
+    to give up immediately, log + skip, or schedule a retry. The
+    coordinator's cooldown logic catches this and treats it as a fast
+    skip (no FB request burned)."""
+
+    def __init__(self, seconds_remaining: float, reason: str = "rate-limited"):
+        self.seconds_remaining = seconds_remaining
+        self.reason = reason
+        super().__init__(
+            f"FB rate-limit block active for ~{int(seconds_remaining)}s more "
+            f"({reason})"
+        )
+
+
+# Process-wide, shared block. The moment ANY FB request comes back as
+# rate-limited, we set this timestamp to (now + cooldown). All future
+# FB calls — search, detail, comp lookup, probe — read this and raise
+# FacebookRateLimited if it's still in the future. This stops a single
+# rate-limit hit from triggering N follow-on requests (comp lookups,
+# detail fetches) that compound the block.
+#
+# Lives at module scope (not on _RateGate) so the search client and
+# detail client share one block — they're separate Sessions but talk
+# to the same FB endpoint and share the same per-IP quota.
+_global_block_lock = threading.Lock()
+_global_blocked_until: float = 0.0
+# Initial hard-stop on first detection — bumped from "implicit 60s
+# coordinator cooldown" because the user observed the cooldown wasn't
+# stopping comp/detail requests fast enough. 90s gives FB clear breathing
+# room before we touch the endpoint again.
+HARD_STOP_DURATION_S = 90.0
+
+
+def mark_globally_rate_limited(reason: str = "fb_rate_limit") -> None:
+    """Called by any FB-touching code that observes a rate-limit
+    response. Sets a process-wide block so the next ~90s of FB requests
+    fail fast (raise FacebookRateLimited) instead of going to the wire.
+
+    The duration is intentionally NOT exponential here — that's the
+    coordinator's job (in scheduler/jobs.py). This is a shorter,
+    aggressive 'stop bleeding right now' fence."""
+    global _global_blocked_until
+    with _global_block_lock:
+        deadline = time.monotonic() + HARD_STOP_DURATION_S
+        if deadline > _global_blocked_until:
+            _global_blocked_until = deadline
+            logger.warning(
+                "fb-block: hard-stop %ds (reason=%s) — all FB requests will "
+                "raise FacebookRateLimited until then",
+                int(HARD_STOP_DURATION_S), reason,
+            )
+
+
+def check_global_block() -> None:
+    """Raise FacebookRateLimited if we're in the process-wide block.
+    Called by the rate gate at the start of every wait()."""
+    with _global_block_lock:
+        remaining = _global_blocked_until - time.monotonic()
+    if remaining > 0:
+        raise FacebookRateLimited(remaining, "global block active")
+
+
+def global_block_remaining_s() -> float:
+    """Read-only access for the dashboard / coordinator. Returns 0
+    when not blocked."""
+    with _global_block_lock:
+        return max(0.0, _global_blocked_until - time.monotonic())
+
+
 class _RateGate:
     """Simple sleep-based rate gate. Thread-safe; cheap enough for the
-    pipeline's modest QPS."""
+    pipeline's modest QPS.
+
+    On every wait(), checks the process-wide rate-limit block FIRST.
+    If blocked, raises FacebookRateLimited immediately rather than
+    sleeping or proceeding to a request that we KNOW will fail."""
+
     def __init__(self, min_interval_s: float):
         self._min = min_interval_s
         self._last = 0.0
         self._lock = threading.Lock()
 
     def wait(self) -> None:
+        # Process-wide hard-stop first. This must come BEFORE the
+        # min-interval sleep so a blocked period doesn't burn idle
+        # threads waiting on the lock.
+        check_global_block()
         if self._min <= 0:
             return
         with self._lock:
@@ -364,6 +445,12 @@ class FacebookSearchClient:
                         error_message = error_message or msg[:200]
                     elif error_message is None:
                         error_message = msg[:200]
+                # The moment a rate-limit comes back, stop ALL further
+                # FB requests across the process. This includes comp
+                # lookups and detail fetches that would otherwise
+                # compound the block in the next minute.
+                if rate_limited:
+                    mark_globally_rate_limited(reason="fb_rate_limit")
             except Exception:  # noqa: BLE001 — never crash the scraper
                 pass
 

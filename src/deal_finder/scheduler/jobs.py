@@ -42,9 +42,11 @@ from ..db.listings import (
     upsert_processed,
 )
 from ..scraper.facebook import (
+    FacebookRateLimited,
     SearchListing,
     SearchParams,
     get_default_client as get_search_client,
+    global_block_remaining_s,
 )
 from ..scraper.facebook_detail import (
     get_default_client as get_detail_client,
@@ -1019,6 +1021,15 @@ def coordinator_tick() -> None:
             return
         try:
             poll_batch(batch)
+        except FacebookRateLimited as e:
+            # Hard-stop fired mid-batch. Log + record a backoff event
+            # (no FB request was burned — the gate raised pre-flight).
+            logger.warning(
+                "coordinator: hard-stop tripped mid-batch (~%ds remaining)",
+                int(e.seconds_remaining),
+            )
+            record_event("rate_limit_hard_stop",
+                         remaining_s=int(e.seconds_remaining))
         except Exception as e:  # noqa: BLE001
             logger.exception("coordinator_tick batch %s crashed: %s",
                              [w["id"] for w in batch], e)
@@ -1030,6 +1041,17 @@ def coordinator_tick() -> None:
         return
     try:
         poll_search(sid)
+    except FacebookRateLimited as e:
+        # Hard-stop fired before we could send the search. This means a
+        # rate-limit was just observed by another code path (a comp
+        # lookup or detail fetch) and the global gate is now armed.
+        logger.warning(
+            "coordinator(%s): hard-stop tripped pre-flight (~%ds remaining)",
+            sid, int(e.seconds_remaining),
+        )
+        record_event("rate_limit_hard_stop",
+                     search_id=sid,
+                     remaining_s=int(e.seconds_remaining))
     except Exception as e:  # noqa: BLE001
         logger.exception("coordinator_tick(%s) crashed: %s", sid, e)
 

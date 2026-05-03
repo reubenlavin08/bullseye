@@ -29,6 +29,15 @@ from typing import Any
 from curl_cffi import requests  # type: ignore[import-untyped]
 from curl_cffi.requests import exceptions as cffi_exc  # type: ignore[import-untyped]
 
+# Reuse the same rate-gate + global-block helpers used by the search
+# client. PDP fetches and search calls share the same per-IP quota at
+# FB so any rate-limit observed by either should pause both.
+from .facebook import (
+    FacebookRateLimited,
+    check_global_block,
+    mark_globally_rate_limited,
+)
+
 logger = logging.getLogger(__name__)
 
 _IMPERSONATE_TARGET = "chrome131"
@@ -109,12 +118,18 @@ class Detail:
 # --- Rate gate ------------------------------------------------------------
 
 class _RateGate:
+    """Same shape as the search-client gate, but also checks the
+    process-wide rate-limit block before sleeping. Detail fetches
+    happen RIGHT AFTER a search returns listings — exactly the pattern
+    that compounds rate-limits if not gated."""
+
     def __init__(self, min_interval_s: float):
         self._min = min_interval_s
         self._last = 0.0
         self._lock = threading.Lock()
 
     def wait(self) -> None:
+        check_global_block()  # raises FacebookRateLimited if blocked
         if self._min <= 0:
             return
         with self._lock:
