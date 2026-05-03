@@ -30,6 +30,7 @@ from ..appraisal.formula import compute_score
 from ..appraisal.normalizer import normalize_title
 from ..appraisal.secondary_check import should_verify, verify_listing
 from ..appraisal.worker import _recover_price, drain_queue
+from ..comps.ebay import get_best_comps
 from ..comps.marketplace import get_comps
 from ..db.connection import get_conn
 from ..db.events import record_event
@@ -516,15 +517,30 @@ def _process_new_listing(
                     )
         return "unscoreable"
 
-    # Comps + condition signals + score
+    # Comps + condition signals + score.
+    # Prefer eBay sold-comps (ground-truth prices) when EBAY_APP_ID is
+    # configured AND eBay returns enough sample. Falls back to
+    # Marketplace asking-prices automatically when eBay is disabled
+    # or has insufficient data — see comps.ebay.get_best_comps for the
+    # decision rule. exclude_listing_id only matters for Marketplace
+    # since eBay listings don't overlap with FB listing IDs.
     search_term = normalize_title(pl.title) or pl.title
-    comp = get_comps(
+    comp = get_best_comps(
         search_term=search_term,
-        lat=49.2827, lng=-123.1207, radius_km=1500,  # comp radius is wide
-        exclude_listing_id=sl.id,
         asking_price=asking,
-        category_id=pl.category_id,
     )
+    # If we ended up with Marketplace comps via the fallback, we lost
+    # the exclude_listing_id and category_id filters that the original
+    # path applies. Re-fetch through the original Marketplace function
+    # in that case so those filters are honored.
+    if comp.source != "ebay":
+        comp = get_comps(
+            search_term=search_term,
+            lat=49.2827, lng=-123.1207, radius_km=1500,
+            exclude_listing_id=sl.id,
+            asking_price=asking,
+            category_id=pl.category_id,
+        )
     cond = extract_condition_signals(description)
     breakdown = compute_score(
         asking_price=asking,
