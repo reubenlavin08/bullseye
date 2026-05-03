@@ -52,13 +52,30 @@ SECONDARY_CHECK_MODEL = os.environ.get(
 )
 
 # Cloud escalation thresholds — when do we promote a Tier-1 (Ollama)
-# verdict to a Tier-2 (MiniMax cloud) check? Designed to use the cloud
-# sparingly:
-#   - score >= LLM_CLOUD_FORCE_SCORE   → ALWAYS escalate (paranoia tier)
-#   - tier-1 verdict 'uncertain'       → escalate (model couldn't decide)
-#   - score >= LLM_CLOUD_LOWCONF_SCORE AND confidence='low' → escalate
-LLM_CLOUD_FORCE_SCORE = int(os.environ.get("LLM_CLOUD_FORCE_SCORE", "95"))
+# verdict to a Tier-2 (MiniMax cloud) check? Tuned for MAX TOKEN
+# CONSERVATION:
+#
+#   - score >= LLM_CLOUD_FORCE_SCORE (default 97)
+#       → escalate ONLY when score is in the top-tier "must be sure"
+#         range. 97 is paranoid territory — anything above this is a
+#         very-good-deal that's worth one cloud token to verify.
+#
+#   - Tier-1 was 'uncertain' AND score >= 90
+#       → escalate (the model couldn't decide AND the listing is
+#         already high-score enough to email). If score < 90 we don't
+#         care about uncertain — it won't cross threshold anyway.
+#
+#   - score >= 90 AND confidence='low' AND Tier-1 verdict != 'legit'
+#       → escalate (sparse-data + high-score + Tier-1 had any doubt
+#         is the classic false-positive zone)
+#
+# Anything else: trust Tier-1's verdict, save the cloud token.
+#
+# With these defaults the cloud LLM realistically fires 0-3x/day even
+# under heavy poll volume (>300 listings/day appraised).
+LLM_CLOUD_FORCE_SCORE = int(os.environ.get("LLM_CLOUD_FORCE_SCORE", "97"))
 LLM_CLOUD_LOWCONF_SCORE = int(os.environ.get("LLM_CLOUD_LOWCONF_SCORE", "90"))
+LLM_CLOUD_UNCERTAIN_MIN_SCORE = int(os.environ.get("LLM_CLOUD_UNCERTAIN_MIN_SCORE", "90"))
 
 
 @dataclass
@@ -231,26 +248,63 @@ def _verify_with_ollama(
 def _should_escalate_to_cloud(
     *, tier1_verdict: str, deal_score: int, confidence_label: str | None,
 ) -> tuple[bool, str]:
-    """Decide whether to spend a MiniMax call confirming Tier-1's
-    verdict. Returns (should_escalate, reason).
+    """Decide whether to spend a MiniMax token confirming Tier-1.
+    Returns (should_escalate, reason).
 
-    Triggers (any one is enough):
-      1. tier1 returned 'uncertain' — local model couldn't decide
-      2. deal_score >= LLM_CLOUD_FORCE_SCORE — paranoia tier (default 95)
-      3. deal_score >= LLM_CLOUD_LOWCONF_SCORE AND confidence='low' —
-         high score + sparse data is the classic false-positive zone
+    Designed to be very stingy. The cloud LLM is a finite resource;
+    Tier 1 already runs on every score≥85 listing for free. We only
+    pay for cloud verification when the stakes are highest:
+
+      Trigger A — top-tier outlier scores
+        deal_score >= LLM_CLOUD_FORCE_SCORE (default 97)
+        These are the listings that, if real, would email immediately
+        as "must-buy". One cloud token to verify is cheap insurance.
+
+      Trigger B — Tier-1 said uncertain on a near-threshold listing
+        tier1_verdict == 'uncertain' AND score >= LLM_CLOUD_UNCERTAIN_MIN_SCORE (90)
+        The local model couldn't decide AND the score is high enough
+        we'd actually email. If score < 90 we don't care about
+        uncertain — it won't cross threshold anyway.
+
+      Trigger C — high score with low statistical confidence + tier-1 not confidently legit
+        score >= LLM_CLOUD_LOWCONF_SCORE (90) AND
+        confidence_label == 'low' AND
+        tier1_verdict != 'legit'
+        Sparse comp data + high score + Tier-1 had any doubt is the
+        classic false-positive zone (e.g. a single weird comp inflated
+        the score).
+
+    Otherwise we trust Tier-1's verdict and save the token. Realistic
+    daily call count under these rules: 0-3 even at 300+ appraised
+    listings/day.
     """
     if not minimax_client.available():
         return False, "minimax unavailable (no API key)"
     if minimax_client.daily_budget_remaining() <= 0:
         return False, "minimax daily budget exhausted"
-    if tier1_verdict == "uncertain":
-        return True, "tier1=uncertain"
+
+    # Trigger A — top-tier score
     if deal_score >= LLM_CLOUD_FORCE_SCORE:
-        return True, f"score>={LLM_CLOUD_FORCE_SCORE}"
-    if deal_score >= LLM_CLOUD_LOWCONF_SCORE and confidence_label == "low":
-        return True, f"score>={LLM_CLOUD_LOWCONF_SCORE}+low-conf"
-    return False, "tier1 sufficient"
+        return True, f"score>={LLM_CLOUD_FORCE_SCORE} (top-tier)"
+
+    # Trigger B — uncertain near threshold
+    if (
+        tier1_verdict == "uncertain"
+        and deal_score >= LLM_CLOUD_UNCERTAIN_MIN_SCORE
+    ):
+        return True, f"tier1=uncertain + score>={LLM_CLOUD_UNCERTAIN_MIN_SCORE}"
+
+    # Trigger C — high score + low conf + not confidently legit
+    if (
+        deal_score >= LLM_CLOUD_LOWCONF_SCORE
+        and confidence_label == "low"
+        and tier1_verdict != "legit"
+    ):
+        return True, (
+            f"score>={LLM_CLOUD_LOWCONF_SCORE} + low-conf + tier1!=legit"
+        )
+
+    return False, "tier1 sufficient (saving token)"
 
 
 def verify_listing(

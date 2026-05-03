@@ -291,9 +291,25 @@ def test_verify_concern_truncated():
 # --- Tiered escalation: Ollama → MiniMax ---------------------------------
 
 
-def test_should_escalate_when_tier1_uncertain():
-    """Tier 1 returning 'uncertain' should always escalate (when MiniMax
-    is available + budget remains)."""
+def test_should_escalate_when_tier1_uncertain_and_score_high_enough():
+    """Tier 1 returning 'uncertain' should escalate ONLY when the score
+    is high enough that the listing would actually email. Below that
+    threshold, even uncertain doesn't matter."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10):
+        # uncertain + score=90 (== LLM_CLOUD_UNCERTAIN_MIN_SCORE) → escalate
+        should, reason = sc._should_escalate_to_cloud(
+            tier1_verdict="uncertain", deal_score=90, confidence_label="medium",
+        )
+    assert should
+    assert "uncertain" in reason
+
+
+def test_should_NOT_escalate_when_uncertain_below_min_score():
+    """Tier 1 uncertain at score=85 → don't escalate. Saves a token
+    on a listing that wouldn't email anyway."""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     with patch.object(minimax_client, "available", return_value=True), \
@@ -301,34 +317,62 @@ def test_should_escalate_when_tier1_uncertain():
         should, reason = sc._should_escalate_to_cloud(
             tier1_verdict="uncertain", deal_score=85, confidence_label="medium",
         )
-    assert should
-    assert "uncertain" in reason
+    assert not should
+    assert "sufficient" in reason
 
 
 def test_should_escalate_when_score_at_force_threshold():
-    """Score >= LLM_CLOUD_FORCE_SCORE always escalates regardless of
-    Tier 1's verdict."""
+    """Score >= LLM_CLOUD_FORCE_SCORE (97) always escalates regardless
+    of Tier 1's verdict. Top-tier outliers are worth one token."""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     with patch.object(minimax_client, "available", return_value=True), \
          patch.object(minimax_client, "daily_budget_remaining", return_value=10):
-        # Even when tier1 said legit, score>=95 escalates
+        should, _ = sc._should_escalate_to_cloud(
+            tier1_verdict="legit", deal_score=97, confidence_label="high",
+        )
+    assert should
+
+
+def test_should_NOT_escalate_at_high_score_below_force():
+    """Score=95 (under 97 force-threshold), tier1=legit → trust tier1.
+    The old logic would escalate here, but we tightened it."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10):
         should, _ = sc._should_escalate_to_cloud(
             tier1_verdict="legit", deal_score=95, confidence_label="high",
         )
-    assert should
+    assert not should
 
 
-def test_should_escalate_low_conf_high_score():
-    """Score >= 90 with low confidence should escalate."""
+def test_should_escalate_low_conf_high_score_when_tier1_uncertain():
+    """Score >= 90 + low confidence + tier1 NOT legit → escalate.
+    Sparse comp data + high score is the false-positive zone."""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     with patch.object(minimax_client, "available", return_value=True), \
          patch.object(minimax_client, "daily_budget_remaining", return_value=10):
         should, _ = sc._should_escalate_to_cloud(
-            tier1_verdict="legit", deal_score=92, confidence_label="low",
+            tier1_verdict="uncertain", deal_score=92, confidence_label="low",
         )
     assert should
+
+
+def test_should_NOT_escalate_low_conf_when_tier1_legit():
+    """Score 92 + low conf + tier1=LEGIT → don't escalate. Tier 1's
+    confident yes-vote on a high-score-but-low-statistical-confidence
+    listing is enough — saves a token."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10):
+        should, reason = sc._should_escalate_to_cloud(
+            tier1_verdict="legit", deal_score=92, confidence_label="low",
+        )
+    assert not should
+    assert "sufficient" in reason
 
 
 def test_should_NOT_escalate_when_minimax_unavailable():
@@ -371,8 +415,9 @@ def test_should_NOT_escalate_when_tier1_legit_and_score_below_threshold():
 
 
 def test_verify_listing_uses_tier2_verdict_when_escalated():
-    """End-to-end: Tier 1 says uncertain, MiniMax says suspect → final
-    result is suspect with backend='minimax'."""
+    """End-to-end: Tier 1 says uncertain on score=92, low conf →
+    Trigger C fires → MiniMax says suspect → final result is suspect
+    with backend='minimax'."""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     fake_ollama_resp = _FakeResponse({
@@ -409,7 +454,8 @@ def test_verify_listing_uses_tier2_verdict_when_escalated():
 
 def test_verify_listing_falls_back_to_tier1_when_tier2_skipped():
     """If MiniMax bails (budget race, network), use Tier 1's verdict
-    rather than returning skipped."""
+    rather than returning skipped. Score=99 hits force-threshold
+    so escalation IS attempted, but it fails and falls back."""
     from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     fake_ollama_resp = _FakeResponse({

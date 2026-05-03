@@ -27,6 +27,13 @@ from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 
+# Load .env BEFORE any module that reads os.environ at import time.
+# override=True forces .env values over pre-set Windows/shell env vars
+# — critical when a stale key in the shell environment masks the
+# updated value the user just put in .env.
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+
 from flask import Flask, jsonify, render_template, request
 
 # Make the package src/ tree importable when running without `pip install -e`.

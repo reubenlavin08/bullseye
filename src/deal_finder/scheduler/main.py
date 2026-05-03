@@ -29,6 +29,16 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Load .env BEFORE any other imports that might read os.environ at
+# module-import time. override=True forces .env to win over pre-set
+# Windows / shell environment variables — important when a user has
+# stale keys from a previous session sitting in their shell.
+from dotenv import load_dotenv
+load_dotenv(
+    Path(__file__).resolve().parents[3] / ".env",
+    override=True,
+)
+
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.blocking import BlockingScheduler
 

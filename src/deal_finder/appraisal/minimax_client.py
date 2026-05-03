@@ -42,9 +42,16 @@ from ..db.connection import get_conn
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_BASE_URL = "https://api.minimaxi.chat/v1"
+# Verified working with sk-api-* keys from platform.minimax.io as of
+# 2026-05. The /v1/chat/completions path is OpenAI-compatible.
+DEFAULT_BASE_URL = "https://api.minimax.io/v1"
 DEFAULT_MODEL = "MiniMax-Text-01"
-DEFAULT_DAILY_BUDGET = 20
+# Conservative daily budget. With ~46 active watches polling every
+# ~15 min and only escalating ON THE TIGHTEST trigger conditions
+# (see secondary_check.py), we expect 0-3 escalations/day in normal
+# operation. 5 leaves headroom for a busy day; below that and we'd
+# start dropping legitimate verifications.
+DEFAULT_DAILY_BUDGET = 5
 DEFAULT_TIMEOUT_S = 30
 
 
@@ -62,6 +69,44 @@ class VerifyResult:
 
 def _api_key() -> str:
     return os.environ.get("MINIMAX_API_KEY", "").strip()
+
+
+def _parse_json_loosely(text: str | None) -> dict | None:
+    """Try to extract a JSON object from the LLM's text response.
+    Handles three common patterns:
+
+      1. Pure JSON: '{"verdict": "legit", ...}'
+      2. Markdown-fenced: '```json\\n{...}\\n```' (or just ```)
+      3. Mixed prose + JSON: 'Here is my analysis: {...}'
+
+    Returns the parsed dict, or None if no JSON could be extracted.
+    """
+    if not text:
+        return None
+    text = text.strip()
+    # Try direct parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Strip markdown fences if present
+    for fence in ("```json", "```"):
+        if text.startswith(fence):
+            inner = text[len(fence):]
+            inner = inner.rsplit("```", 1)[0].strip()
+            try:
+                return json.loads(inner)
+            except json.JSONDecodeError:
+                pass
+    # Last resort: find the first {...} block by scanning
+    start = text.find("{")
+    end = text.rfind("}")
+    if 0 <= start < end:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
 def available() -> bool:
@@ -222,6 +267,11 @@ def verify(
         deal_score=deal_score,
     )
 
+    # Note: MiniMax's OpenAI-compatible endpoint does NOT support the
+    # `response_format: {type: "json_object"}` param (returns HTTP 400
+    # 'unknown response_format type'). We rely on the prompt's
+    # 'Respond with valid JSON ONLY' instruction + a defensive parse
+    # below that strips markdown fences if the model adds them.
     payload = {
         "model": model,
         "messages": [
@@ -230,7 +280,6 @@ def verify(
         ],
         "temperature": 0.1,
         "max_tokens": 256,
-        "response_format": {"type": "json_object"},
     }
     headers = {
         "Authorization": f"Bearer {_api_key()}",
@@ -272,10 +321,14 @@ def verify(
     try:
         body = resp.json()
         content = body["choices"][0]["message"]["content"]
-        parsed = json.loads(content) if content else {}
-    except (KeyError, IndexError, json.JSONDecodeError, TypeError) as e:
-        logger.warning("minimax response parse error: %s", e)
+        parsed = _parse_json_loosely(content)
+    except (KeyError, IndexError, TypeError) as e:
+        logger.warning("minimax response shape error: %s", e)
         return VerifyResult("uncertain", "(parse error)", None,
+                            elapsed, model, "minimax")
+    if parsed is None:
+        logger.warning("minimax returned non-JSON: %s", (content or "")[:200])
+        return VerifyResult("uncertain", "(non-JSON response)", None,
                             elapsed, model, "minimax")
 
     raw_verdict = str(parsed.get("verdict") or "uncertain").lower()

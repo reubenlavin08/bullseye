@@ -35,12 +35,13 @@ def test_available_true_with_key(monkeypatch):
 def test_budget_remaining_full_with_zero_calls():
     from deal_finder.appraisal import minimax_client
     with patch.object(minimax_client, "daily_calls_used_today", return_value=0):
-        assert minimax_client.daily_budget_remaining() == 20  # default
+        assert minimax_client.daily_budget_remaining() == minimax_client.DEFAULT_DAILY_BUDGET
 
 
 def test_budget_remaining_drained_at_cap():
     from deal_finder.appraisal import minimax_client
-    with patch.object(minimax_client, "daily_calls_used_today", return_value=20):
+    cap = minimax_client.DEFAULT_DAILY_BUDGET
+    with patch.object(minimax_client, "daily_calls_used_today", return_value=cap):
         assert minimax_client.daily_budget_remaining() == 0
 
 
@@ -60,11 +61,11 @@ def test_budget_respects_env_override(monkeypatch):
 
 
 def test_budget_invalid_env_uses_default(monkeypatch):
-    """A garbage MINIMAX_DAILY_BUDGET value falls back to default 20."""
+    """A garbage MINIMAX_DAILY_BUDGET value falls back to the default."""
     monkeypatch.setenv("MINIMAX_DAILY_BUDGET", "not-a-number")
     from deal_finder.appraisal import minimax_client
     with patch.object(minimax_client, "daily_calls_used_today", return_value=0):
-        assert minimax_client.daily_budget_remaining() == 20
+        assert minimax_client.daily_budget_remaining() == minimax_client.DEFAULT_DAILY_BUDGET
 
 
 # --- verify() — without network ----------------------------------------
