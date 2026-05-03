@@ -264,9 +264,15 @@
                 const k = step.dataset.step;
                 step.querySelector(".funnel-num").textContent = fmtNum(map[k]);
             });
+            // Show the actual subscriber threshold so '≥ 90' is
+            // unambiguous (was a hardcoded label that didn't reflect
+            // user's real threshold).
+            const tEl = document.getElementById("funnel-threshold-val");
+            if (tEl && f.threshold_used != null) tEl.textContent = f.threshold_used;
             const pending = document.getElementById("funnel-pending");
             if (f.pending_unsent > 0) {
-                pending.textContent = `+ ${f.pending_unsent} pending unsent (above threshold, not yet emailed)`;
+                pending.textContent =
+                    `+ ${f.pending_unsent} pending unsent (score ≥ ${f.threshold_used}, not yet emailed)`;
                 pending.style.display = "";
             } else {
                 pending.style.display = "none";

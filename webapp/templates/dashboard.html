@@ -131,8 +131,11 @@
                     <div class="funnel-num">—</div><div class="funnel-label">appraised</div>
                 </div>
                 <div class="funnel-arrow">→</div>
-                <div class="funnel-step funnel-step-hot" data-step="over_threshold">
-                    <div class="funnel-num">—</div><div class="funnel-label">≥ threshold</div>
+                <div class="funnel-step funnel-step-hot" data-step="over_threshold"
+                     id="funnel-step-threshold"
+                     title="Listings scraped today scoring at or above the active subscriber threshold.">
+                    <div class="funnel-num">—</div>
+                    <div class="funnel-label">≥ <span id="funnel-threshold-val">—</span></div>
                 </div>
                 <div class="funnel-arrow">→</div>
                 <div class="funnel-step funnel-step-good" data-step="notified">

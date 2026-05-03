@@ -606,6 +606,22 @@ def api_dashboard_summary():
              emails_today, emails_total,
              email_fail_today, errors_24h) = cur.fetchone()
 
+            # Funnel uses the user's ACTUAL subscriber threshold (the
+            # min across all active subscribers), not a hardcoded 70.
+            # Otherwise 'pending unsent' counts listings that will
+            # never email because they're below the user's threshold,
+            # which was misleading. Falls back to ALERT_SCORE_THRESHOLD
+            # env (default 70) when no active subscribers.
+            cur.execute(
+                "SELECT MIN(score_threshold) FROM subscribers WHERE active = TRUE",
+            )
+            sub_thresh_row = cur.fetchone()
+            funnel_threshold = (
+                int(sub_thresh_row[0])
+                if sub_thresh_row and sub_thresh_row[0] is not None
+                else _default_threshold()
+            )
+
             cur.execute(
                 """SELECT
                        COUNT(*) FILTER (WHERE scraped_at >= NOW()::date) AS scraped,
@@ -614,14 +630,15 @@ def api_dashboard_summary():
                        COUNT(*) FILTER (WHERE appraised = TRUE
                             AND scraped_at >= NOW()::date) AS appraised,
                        COUNT(*) FILTER (WHERE deal_score IS NOT NULL
-                            AND deal_score >= 70 AND rejected = FALSE
+                            AND deal_score >= %s AND rejected = FALSE
                             AND scraped_at >= NOW()::date) AS over_threshold,
                        COUNT(*) FILTER (WHERE notified = TRUE
                             AND notified_at >= NOW()::date) AS notified,
                        COUNT(*) FILTER (WHERE deal_score IS NOT NULL
-                            AND deal_score >= 70 AND rejected = FALSE
+                            AND deal_score >= %s AND rejected = FALSE
                             AND notified = FALSE) AS pending
                    FROM listings""",
+                (funnel_threshold, funnel_threshold),
             )
             scraped, rej, appr, over, notif, pending = cur.fetchone()
 
@@ -702,6 +719,7 @@ def api_dashboard_summary():
             "over_threshold": over,
             "notified": notif,
             "pending_unsent": pending,
+            "threshold_used": funnel_threshold,
         },
     })
 
