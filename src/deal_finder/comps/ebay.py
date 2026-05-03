@@ -99,30 +99,52 @@ def get_ebay_comps(
                 # disabled or invalid APP_ID — leave cache empty
                 pass
             else:
+                results = []
+                # Prefer Browse API (modern, well-quota'd, OAuth-based).
+                # Only used if Cert ID is present so OAuth can complete.
                 try:
-                    results = client.find_completed_items(
-                        keywords=search_term,
-                        entries_per_page=entries_per_page,
+                    results = client.find_active_items(
+                        keywords=search_term, limit=entries_per_page,
                     )
-                    obs = to_comp_observations(results)
-                    if obs:
-                        with get_conn() as conn:
-                            with conn:
-                                inserted = insert_comps(conn, search_term, SOURCE, obs)
-                        logger.info(
-                            "ebay-comp refetch term=%r inserted=%d",
-                            search_term, inserted,
-                        )
-                    else:
-                        logger.info("ebay-comp empty result term=%r", search_term)
+                except ValueError as e:
+                    # No Cert ID, or OAuth rejected. Fall through to
+                    # the legacy Finding API which only needs App ID.
+                    logger.info(
+                        "ebay browse api unavailable (%s); trying finding api",
+                        str(e)[:100],
+                    )
                 except Exception as e:  # noqa: BLE001
-                    # Fail soft: log + continue with whatever cache we have.
-                    # Common reasons: rate-limited (5000/day cap),
-                    # transient network, app-id mis-key.
-                    logger.warning(
-                        "ebay-comp fetch failed for term=%r: %s",
-                        search_term, e,
+                    logger.warning("ebay browse-api error: %s", e)
+                    results = []
+
+                if not results:
+                    # Fallback: legacy findCompletedItems (sold prices).
+                    # Heavily rate-limited on new keysets; usually fails
+                    # with HTTP 500 + 'exceeded number of times'. Keeping
+                    # it as a fallback in case it's enabled for some
+                    # accounts or comes back in the future.
+                    try:
+                        results = client.find_completed_items(
+                            keywords=search_term,
+                            entries_per_page=entries_per_page,
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "ebay-comp fetch failed for term=%r: %s",
+                            search_term, e,
+                        )
+
+                obs = to_comp_observations(results)
+                if obs:
+                    with get_conn() as conn:
+                        with conn:
+                            inserted = insert_comps(conn, search_term, SOURCE, obs)
+                    logger.info(
+                        "ebay-comp refetch term=%r inserted=%d",
+                        search_term, inserted,
                     )
+                else:
+                    logger.info("ebay-comp empty result term=%r", search_term)
         finally:
             event.set()
             with _inflight_lock:

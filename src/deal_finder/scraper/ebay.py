@@ -51,10 +51,30 @@ logger = logging.getLogger(__name__)
 
 FINDING_URL = "https://svcs.ebay.com/services/search/FindingService/v1"
 
+# Browse API (modern OAuth-based replacement for the deprecated Finding
+# API). findCompletedItems on the legacy Finding API is rate-limited to
+# ~zero on new keysets, so we use Browse for the actual fetches.
+BROWSE_BASE_URL = "https://api.ebay.com"
+BROWSE_OAUTH_URL = f"{BROWSE_BASE_URL}/identity/v1/oauth2/token"
+BROWSE_SEARCH_URL = f"{BROWSE_BASE_URL}/buy/browse/v1/item_summary/search"
+
 # `EBAY-US` is the global U.S. site; `EBAY-ENCA` is the Canadian site
 # (English). Most Canadian users want EBAY-ENCA so prices come back in
 # CAD for direct comparison with Marketplace Vancouver listings.
+# For Browse API, this maps to the X-EBAY-C-MARKETPLACE-ID header.
 DEFAULT_GLOBAL_ID = os.environ.get("EBAY_GLOBAL_ID", "EBAY-US")
+
+# Map Finding-API GLOBAL-ID values to Browse-API marketplace IDs.
+_GLOBAL_ID_TO_MARKETPLACE = {
+    "EBAY-US": "EBAY_US",
+    "EBAY-ENCA": "EBAY_CA",
+    "EBAY-GB": "EBAY_GB",
+    "EBAY-DE": "EBAY_DE",
+    "EBAY-AU": "EBAY_AU",
+    "EBAY-FR": "EBAY_FR",
+    "EBAY-IT": "EBAY_IT",
+    "EBAY-ES": "EBAY_ES",
+}
 
 # Master enable: defaults true if APP_ID present, else false. Set
 # EBAY_ENABLED=0 to force off even with a key (useful during outages).
@@ -122,6 +142,7 @@ class EbayClient:
         self,
         *,
         app_id: str | None = None,
+        cert_id: str | None = None,
         global_id: str | None = None,
         rate_interval_s: float = _DEFAULT_INTERVAL_S,
         timeout_s: int = 20,
@@ -133,10 +154,153 @@ class EbayClient:
                 "EBAY_APP_ID not set. Get one at developer.ebay.com → "
                 "My Account → Application Keysets."
             )
+        # Cert ID is optional — only required for Browse API OAuth.
+        # Finding API doesn't need it. We tolerate either being absent
+        # so a user can run with whichever path is available.
+        self._cert_id = cert_id or os.environ.get("EBAY_CERT_ID", "").strip() or None
         self._global_id = global_id or DEFAULT_GLOBAL_ID
+        self._marketplace_id = _GLOBAL_ID_TO_MARKETPLACE.get(
+            self._global_id, "EBAY_US",
+        )
         self._gate = _RateGate(rate_interval_s)
         self._timeout = timeout_s
         self._session = session or requests.Session()
+        # OAuth token cache for Browse API. Tokens are 7200s (2h) TTL;
+        # we refresh ~5 min before expiry to avoid races.
+        self._oauth_token: str | None = None
+        self._oauth_expires_at: float = 0.0
+        self._oauth_lock = threading.Lock()
+
+    # --- Browse API (OAuth) — primary path -------------------------------
+
+    def _get_oauth_token(self) -> str:
+        """Fetch & cache a Browse API access token. Uses the
+        client-credentials grant: app+cert IDs are exchanged for a
+        bearer token valid ~2h. We re-fetch ~5 min before expiry.
+
+        Raises ValueError when EBAY_CERT_ID isn't configured (Browse API
+        requires both App ID + Cert ID; Finding API only needs App ID).
+        """
+        if not self._cert_id:
+            raise ValueError(
+                "EBAY_CERT_ID not set — required for Browse API. "
+                "Get it at developer.ebay.com next to your App ID "
+                "(labeled 'Cert ID (Client Secret)')."
+            )
+
+        with self._oauth_lock:
+            now = time.monotonic()
+            if self._oauth_token and now < self._oauth_expires_at - 300:
+                return self._oauth_token
+
+            import base64
+            basic = base64.b64encode(
+                f"{self._app_id}:{self._cert_id}".encode("utf-8"),
+            ).decode("ascii")
+
+            self._gate.wait()
+            resp = self._session.post(
+                BROWSE_OAUTH_URL,
+                headers={
+                    "Authorization": f"Basic {basic}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data={
+                    "grant_type": "client_credentials",
+                    # Public Browse API scope — read-only, no user data
+                    "scope": "https://api.ebay.com/oauth/api_scope",
+                },
+                timeout=self._timeout,
+            )
+            if resp.status_code >= 400:
+                raise ValueError(
+                    f"eBay OAuth token request failed (HTTP {resp.status_code}): "
+                    f"{resp.text[:300]}"
+                )
+            body = resp.json()
+            token = body.get("access_token")
+            expires_in = int(body.get("expires_in", 7200))
+            if not token:
+                raise ValueError(
+                    f"eBay OAuth response missing access_token: {body}"
+                )
+            self._oauth_token = token
+            self._oauth_expires_at = now + expires_in
+            return token
+
+    def find_active_items(
+        self,
+        *,
+        keywords: str,
+        limit: int = 50,
+        condition_filter: str | None = None,
+        price_min: float | None = None,
+        price_max: float | None = None,
+    ) -> list[EbayCompResult]:
+        """Browse API search — returns ACTIVE listings (asking prices).
+
+        This is the modern replacement for findCompletedItems. eBay
+        rate-limited the legacy 'sold items' endpoint to nearly zero
+        on new keysets, so we use Browse for the actual data. The
+        prices are asking-prices, but eBay listings are far cleaner
+        than FB Marketplace (less spam, BIN prices that often = sold,
+        explicit condition filtering).
+
+        condition_filter: an eBay filter expression like 'NEW|USED' or
+        'USED'. Default None = no filter (all conditions).
+        """
+        if not keywords or not keywords.strip():
+            return []
+
+        token = self._get_oauth_token()
+
+        params: dict[str, Any] = {
+            "q": keywords.strip(),
+            "limit": min(max(limit, 1), 200),
+        }
+        filter_parts = []
+        if condition_filter:
+            filter_parts.append(f"conditions:{{{condition_filter}}}")
+        if price_min is not None or price_max is not None:
+            lo = f"{price_min:.2f}" if price_min is not None else ""
+            hi = f"{price_max:.2f}" if price_max is not None else ""
+            filter_parts.append(f"price:[{lo}..{hi}],priceCurrency:USD")
+        if filter_parts:
+            params["filter"] = ",".join(filter_parts)
+
+        self._gate.wait()
+        try:
+            resp = self._session.get(
+                BROWSE_SEARCH_URL,
+                params=params,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-EBAY-C-MARKETPLACE-ID": self._marketplace_id,
+                    "Accept": "application/json",
+                },
+                timeout=self._timeout,
+            )
+        except cffi_exc.RequestException as e:
+            logger.warning("eBay browse-api network error: %s", e)
+            raise
+
+        if resp.status_code in (401, 403):
+            # Token may have just expired — clear cache and retry once
+            with self._oauth_lock:
+                self._oauth_token = None
+                self._oauth_expires_at = 0
+            raise ValueError(
+                f"eBay Browse API auth rejected ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+        if resp.status_code >= 400:
+            logger.warning(
+                "eBay Browse HTTP %d: %s", resp.status_code, resp.text[:300],
+            )
+            resp.raise_for_status()
+
+        body = resp.json()
+        return _parse_browse_items(body)
 
     def find_completed_items(
         self,
@@ -205,6 +369,63 @@ class EbayClient:
 
 
 # --- Response parsing -----------------------------------------------------
+
+def _parse_browse_items(body: dict[str, Any]) -> list[EbayCompResult]:
+    """Walk Browse API's `item_summary/search` JSON. Cleaner shape than
+    the legacy Finding API — fields are direct strings/objects, no
+    array-everywhere wrapping."""
+    results: list[EbayCompResult] = []
+    items = body.get("itemSummaries") or []
+    if not isinstance(items, list):
+        return []
+
+    for it in items:
+        try:
+            sold = _extract_browse(it)
+            if sold is not None:
+                results.append(sold)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("skipping browse item, parse error: %s", e)
+            continue
+    return results
+
+
+def _extract_browse(it: dict[str, Any]) -> EbayCompResult | None:
+    """Pull the comp fields out of a Browse API item_summary entry."""
+    item_id = it.get("itemId") or it.get("legacyItemId")
+    title = it.get("title")
+    if not item_id or not title:
+        return None
+    price_obj = it.get("price")
+    if not isinstance(price_obj, dict):
+        return None
+    try:
+        price_amount = float(price_obj.get("value"))
+    except (TypeError, ValueError):
+        return None
+    currency = price_obj.get("currency") or "USD"
+
+    location = None
+    item_loc = it.get("itemLocation")
+    if isinstance(item_loc, dict):
+        # Build a "City, State, Country" string from whatever the API
+        # returned. Most listings include city + country at minimum.
+        parts = [
+            item_loc.get(k) for k in ("city", "stateOrProvince", "country")
+            if item_loc.get(k)
+        ]
+        location = ", ".join(parts) if parts else None
+
+    return EbayCompResult(
+        item_id=str(item_id),
+        title=str(title),
+        price_amount=price_amount,
+        currency=str(currency),
+        end_time_iso=None,    # Browse summaries don't include end time
+        view_url=it.get("itemWebUrl"),
+        location=location,
+    )
+
 
 def _parse_completed_items(body: dict[str, Any]) -> list[EbayCompResult]:
     """Walk the (deeply-nested, array-everywhere) Finding API JSON and
