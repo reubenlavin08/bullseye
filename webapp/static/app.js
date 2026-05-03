@@ -195,9 +195,9 @@
                 (term && bd.sample_size ?
                     '<button class="comps-toggle muted" type="button" ' +
                         'data-comp-term="' + escapeHtml(term) + '" ' +
-                        'data-comp-source="marketplace" ' +
+                        'data-comp-source="' + escapeHtml(data.comp_source || 'marketplace') + '" ' +
                         'title="See the comps we did find">' +
-                        'See ' + bd.sample_size + ' comp(s) ▾</button>' +
+                        'See ' + bd.sample_size + ' ' + (data.comp_source || 'mkt') + ' comp(s) ▾</button>' +
                     '<div class="comps-pane" hidden>' +
                         '<div class="comps-spinner" hidden>loading…</div>' +
                         '<div class="comps-content"></div>' +
@@ -240,9 +240,9 @@
         const compsToggle = (data.search_term && data.comp_sample_size) ?
             '<button class="comps-toggle muted" type="button" ' +
                 'data-comp-term="' + escapeHtml(data.search_term) + '" ' +
-                'data-comp-source="marketplace" ' +
+                'data-comp-source="' + escapeHtml(data.comp_source || 'marketplace') + '" ' +
                 'title="See the listings this median is based on">' +
-                data.comp_sample_size + ' comp(s)' +
+                data.comp_sample_size + ' ' + (data.comp_source || 'mkt') + ' comp(s)' +
                 (data.outliers_dropped ? ', ' + data.outliers_dropped + ' outlier(s) dropped' : '') +
                 (data.comp_median ? ' · raw median $' + Math.round(data.comp_median) : '') +
                 ' ▾</button>' +

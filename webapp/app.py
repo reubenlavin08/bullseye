@@ -1995,16 +1995,31 @@ def appraise(listing_id: str):
     # 4) Run comps
     try:
         search_term = normalize_title(pl.title) or pl.title
-        # Use the normalized title for both keyword search AND embedding
-        # similarity — descriptions add noise that drags cosine scores down.
-        comp = get_comps(
+        # Match the scheduler's pipeline: prefer eBay (better product
+        # identity matching), fall back to Marketplace if eBay sparse.
+        # Without this, the test-appraiser was only ever showing
+        # Marketplace comps even though the live scheduler uses eBay,
+        # making it impossible to validate eBay-driven scores.
+        from deal_finder.comps.ebay import get_best_comps
+        comp = get_best_comps(
             search_term=search_term,
-            lat=49.2827, lng=-123.1207, radius_km=1500,
-            exclude_listing_id=listing_id,
             asking_price=pl.resolved_price,
             target_text=search_term,
-            category_id=getattr(pl, "category_id", None),
         )
+        # If eBay path took over, the exclude_listing_id and
+        # category_id filters from the original Marketplace path
+        # don't apply (eBay listings have separate IDs and no FB
+        # category_id mapping); that's fine — eBay's keyword search
+        # already does explicit product-identity matching.
+        if comp.source != "ebay":
+            comp = get_comps(
+                search_term=search_term,
+                lat=49.2827, lng=-123.1207, radius_km=1500,
+                exclude_listing_id=listing_id,
+                asking_price=pl.resolved_price,
+                target_text=search_term,
+                category_id=getattr(pl, "category_id", None),
+            )
     except Exception as e:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"comp fetch: {e}"}), 502
 
@@ -2082,6 +2097,7 @@ def appraise(listing_id: str):
         "search_term": comp.search_term,
         "comp_median": comp.median,
         "comp_sample_size": comp.sample_size,
+        "comp_source": comp.source,           # 'ebay' | 'marketplace' — which one drove this score
         "ratio": breakdown.ratio,
         "fair_value_source": breakdown.fair_value_source,
         "outliers_dropped": breakdown.outliers_dropped,
