@@ -670,6 +670,55 @@ button.apr-comp-chip { font: inherit; font-size: 9px; }
     text-align: right;
 }
 
+/* Why? chip — opens the score breakdown drawer */
+.apr-bd-chip {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px dashed var(--border-strong);
+    background: var(--bg);
+    color: var(--accent);
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    transition: all 120ms var(--ease);
+}
+.apr-bd-chip:hover {
+    border-style: solid;
+    background: var(--accent-soft);
+}
+
+/* Breakdown drawer sections */
+.bd-section {
+    padding: 14px 18px;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+.bd-section h3 {
+    margin: 0 0 10px;
+    font-family: var(--font-slab);
+    font-size: 13px;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.bd-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dashed rgba(63, 23, 24, 0.06);
+}
+.bd-row:last-child { border-bottom: none; }
+.bd-row > span:first-child { color: var(--fg-muted); }
+.bd-row > span:last-child, .bd-row > strong { color: var(--fg); text-align: right; }
+.bd-score { font-family: var(--font-slab); font-size: 18px; color: var(--accent); }
+.bd-warn { color: var(--bad); font-style: normal; font-weight: 700; }
+.bd-row em.muted { font-style: normal; opacity: 0.7; }
+
 /* ---------- 5. Per-watch table ---------- */
 
 .per-watch-table-wrap {

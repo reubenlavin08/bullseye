@@ -938,6 +938,100 @@ def _default_threshold() -> int:
         return 70
 
 
+@app.route("/api/dashboard/breakdown/<listing_id>")
+def api_dashboard_breakdown(listing_id: str):
+    """Return the full score-computation breakdown for a single listing.
+
+    Used by the dashboard's 'why?' chip that opens a drawer showing
+    exactly how a score was derived: percentile rank vs comps,
+    confidence interval, condition signals, fair-value calc, plus
+    secondary-check verdict if one ran. Source-of-truth for 'is the
+    scoring math working as expected' debugging.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT l.id, l.title, l.price, l.deal_score, l.fair_value,
+                          l.appraisal_note, l.appraisal_breakdown,
+                          l.comp_median, l.comp_mean, l.comp_min, l.comp_max,
+                          l.comp_sample_size, l.comp_search_term, l.comp_source,
+                          l.rejected, l.rejection_reason, l.notified,
+                          l.listing_url, l.seller_location,
+                          us.keyword, us.latitude, us.longitude, us.radius_km
+                   FROM listings l
+                   LEFT JOIN user_searches us ON us.id = l.search_id
+                   WHERE l.id = %s""",
+                (listing_id,),
+            )
+            row = cur.fetchone()
+
+    if not row:
+        return jsonify({"error": "listing not found"}), 404
+
+    (lid, title, price, score, fair, note, breakdown,
+     cmed, cmean, cmin, cmax, csize, cterm, csource,
+     rejected, rej_reason, notified,
+     listing_url, seller_loc, keyword,
+     watch_lat, watch_lng, watch_radius) = row
+
+    # Compute distance the same way the appraisal feed does.
+    distance_km = None
+    if seller_loc and watch_lat is not None and watch_lng is not None:
+        from deal_finder.db.geo import geocode_city, haversine_km
+        coords = geocode_city(seller_loc)
+        if coords is not None:
+            distance_km = round(
+                haversine_km(
+                    float(watch_lat), float(watch_lng),
+                    coords[0], coords[1],
+                ), 1,
+            )
+
+    # Pull the most recent secondary_check event for this listing
+    # (if any) so the drawer can show the LLM's verdict + concern.
+    sec_check = None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT detail FROM scheduler_events
+                   WHERE event_type = 'secondary_check'
+                     AND detail->>'listing_id' = %s
+                   ORDER BY created_at DESC LIMIT 1""",
+                (listing_id,),
+            )
+            row2 = cur.fetchone()
+            if row2:
+                sec_check = row2[0]
+
+    return jsonify({
+        "id": lid,
+        "title": title,
+        "price": float(price) if price is not None else None,
+        "deal_score": int(score) if score is not None else None,
+        "fair_value": float(fair) if fair is not None else None,
+        "appraisal_note": note,
+        "breakdown": breakdown or {},
+        "comp": {
+            "search_term": cterm,
+            "source": csource,
+            "sample_size": csize,
+            "median": float(cmed) if cmed is not None else None,
+            "mean": float(cmean) if cmean is not None else None,
+            "min": float(cmin) if cmin is not None else None,
+            "max": float(cmax) if cmax is not None else None,
+        },
+        "rejected": bool(rejected),
+        "rejection_reason": rej_reason,
+        "notified": bool(notified),
+        "listing_url": listing_url,
+        "keyword": keyword,
+        "seller_location": seller_loc,
+        "distance_km": distance_km,
+        "watch_radius_km": int(watch_radius) if watch_radius is not None else None,
+        "secondary_check": sec_check,
+    })
+
+
 @app.route("/api/dashboard/log/tail")
 def api_dashboard_log_tail():
     """Return the last N lines of logs/scheduler.log for the live tail.

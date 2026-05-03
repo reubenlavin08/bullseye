@@ -379,9 +379,17 @@
     }
 
     function setupTailTabs() {
-        document.querySelectorAll(".dash-tab").forEach((btn) => {
+        // Scope to the live-tail tab group ONLY. The appraisal-feed
+        // also uses .dash-tab buttons (with data-filter) and a global
+        // querySelectorAll would trample each other's handlers. We
+        // only react to buttons inside a .dash-tabs container that
+        // has data-source children (i.e. the live-tail toggle),
+        // never the appraisal-filters group.
+        document.querySelectorAll(".dash-tab[data-source]").forEach((btn) => {
             btn.addEventListener("click", () => {
-                document.querySelectorAll(".dash-tab").forEach((b) =>
+                // Toggle active state ONLY among siblings (other
+                // data-source tabs), not all dash-tabs on the page.
+                btn.parentElement.querySelectorAll(".dash-tab").forEach((b) =>
                     b.classList.toggle("is-active", b === btn)
                 );
                 activeTailSource = btn.dataset.source;
@@ -560,11 +568,129 @@
         const wrap = document.getElementById("appraisal-feed");
         if (!wrap) return;
         wrap.addEventListener("click", (e) => {
-            const chip = e.target.closest(".apr-comp-chip[data-comp-term]");
-            if (!chip) return;
-            e.preventDefault();
-            openCompDrawer(chip.dataset.compTerm, chip.dataset.compSource);
+            const compChip = e.target.closest(".apr-comp-chip[data-comp-term]");
+            if (compChip) {
+                e.preventDefault();
+                openCompDrawer(compChip.dataset.compTerm, compChip.dataset.compSource);
+                return;
+            }
+            const bdChip = e.target.closest(".apr-bd-chip[data-listing-id]");
+            if (bdChip) {
+                e.preventDefault();
+                openBreakdownDrawer(bdChip.dataset.listingId);
+                return;
+            }
         });
+    }
+
+    // --- Breakdown drawer: full score-computation transparency -------
+
+    async function openBreakdownDrawer(listingId) {
+        let drawer = document.getElementById("breakdown-drawer");
+        if (!drawer) {
+            drawer = document.createElement("div");
+            drawer.id = "breakdown-drawer";
+            drawer.className = "comp-drawer";
+            drawer.innerHTML = `
+                <div class="comp-drawer-head">
+                    <span class="comp-drawer-title">score breakdown</span>
+                    <button class="comp-drawer-close" aria-label="close">×</button>
+                </div>
+                <div class="comp-drawer-body" id="breakdown-body">loading…</div>`;
+            document.body.appendChild(drawer);
+            drawer.querySelector(".comp-drawer-close").addEventListener("click", () => {
+                drawer.classList.remove("is-open");
+            });
+        }
+        drawer.classList.add("is-open");
+        drawer.querySelector("#breakdown-body").innerHTML = '<div class="muted">loading…</div>';
+
+        try {
+            const data = await (await fetch(`/api/dashboard/breakdown/${encodeURIComponent(listingId)}`)).json();
+            if (data.error) {
+                drawer.querySelector("#breakdown-body").textContent = data.error;
+                return;
+            }
+            drawer.querySelector("#breakdown-body").innerHTML = renderBreakdown(data);
+        } catch (err) {
+            drawer.querySelector("#breakdown-body").textContent = "Failed: " + err.message;
+        }
+    }
+
+    function renderBreakdown(d) {
+        const bd = d.breakdown || {};
+        const c = d.comp || {};
+        const fmtPct = (x) => x != null ? (x * 100).toFixed(1) + "%" : "—";
+        const fmtPM = (x) => x != null ? Math.round(x) : "?";
+        const ratio = bd.ratio != null ? bd.ratio.toFixed(3) : "—";
+        const ratioInfo = bd.ratio != null
+            ? ` (asking is ${(bd.ratio * 100).toFixed(0)}% of fair value)` : '';
+
+        // Section: Score
+        const scoreSec = `
+            <div class="bd-section">
+                <h3>Score</h3>
+                <div class="bd-row"><span>Final score</span><strong class="bd-score">${d.deal_score ?? '—'}/100</strong></div>
+                <div class="bd-row"><span>Confidence</span><span>${bd.confidence_label ?? '—'} ±${fmtPM(bd.confidence_pm)}</span></div>
+                <div class="bd-row"><span>Percentile rank of asking</span><span>${fmtPct(bd.percentile_rank)} ${bd.percentile_rank != null ? `(cheaper than ${(100 - bd.percentile_rank * 100).toFixed(0)}% of comps)` : ''}</span></div>
+                <div class="bd-row"><span>Asking vs fair value ratio</span><span>${ratio}${ratioInfo}</span></div>
+                <div class="bd-row"><span>Asking price</span><span>$${bd.asking_price ?? d.price ?? '?'}</span></div>
+                <div class="bd-row"><span>Fair value</span><span>$${bd.fair_value ?? d.fair_value ?? '?'} <em class="muted">(${bd.fair_value_source ?? 'unknown'})</em></span></div>
+            </div>`;
+
+        // Section: Comps
+        const compSec = `
+            <div class="bd-section">
+                <h3>Comp data <button class="apr-comp-chip ${c.source ? 'apr-src-' + c.source : ''}"
+                                     type="button"
+                                     data-comp-term="${escapeHtml(c.search_term || '')}"
+                                     data-comp-source="${c.source || 'marketplace'}"
+                                     style="margin-left:6px;">view ${c.sample_size ?? '?'} listings</button></h3>
+                <div class="bd-row"><span>Source</span><span>${c.source || '—'}</span></div>
+                <div class="bd-row"><span>Search term</span><span><em>${escapeHtml(c.search_term || '—')}</em></span></div>
+                <div class="bd-row"><span>Sample size</span><span>${c.sample_size ?? '—'}</span></div>
+                <div class="bd-row"><span>Median</span><span>$${c.median != null ? Math.round(c.median) : '—'}</span></div>
+                <div class="bd-row"><span>Mean</span><span>$${c.mean != null ? Math.round(c.mean) : '—'}</span></div>
+                <div class="bd-row"><span>Range</span><span>$${c.min != null ? Math.round(c.min) : '—'} – $${c.max != null ? Math.round(c.max) : '—'}</span></div>
+                <div class="bd-row"><span>Trimmed median (Tukey)</span><span>$${bd.trimmed_median != null ? Math.round(bd.trimmed_median) : '—'} <em class="muted">(${bd.outliers_dropped ?? 0} outlier${(bd.outliers_dropped ?? 0) === 1 ? '' : 's'} dropped)</em></span></div>
+                <div class="bd-row"><span>IQR / median ratio</span><span>${bd.iqr_ratio != null ? bd.iqr_ratio.toFixed(2) : '—'} ${bd.data_quality_poor ? '<em class="bd-warn">poor (>0.8)</em>' : ''}</span></div>
+            </div>`;
+
+        // Section: Adjustments
+        const adjSec = `
+            <div class="bd-section">
+                <h3>Adjustments</h3>
+                <div class="bd-row"><span>Condition adjustment</span><span>${bd.condition_adjustment ?? 0} pts</span></div>
+                <div class="bd-row"><span>Condition flags fired</span><span>${(bd.condition_flags || []).join(', ') || '—'}</span></div>
+                <div class="bd-row"><span>Condition note</span><span><em>${escapeHtml(bd.condition_note || '—')}</em></span></div>
+                <div class="bd-row"><span>Outlier-rate penalty</span><span>${bd.outlier_rate_penalty ?? 0} pts</span></div>
+                <div class="bd-row"><span>Category confidence floor</span><span>${bd.category_confidence_floor ? '±' + bd.category_confidence_floor : 'n/a'}</span></div>
+                ${bd.bimodal_split_used ? `<div class="bd-row"><span>Bimodal split</span><span>used cluster: ${bd.bimodal_cluster_chosen}</span></div>` : ''}
+            </div>`;
+
+        // Section: Distance / location
+        const distSec = `
+            <div class="bd-section">
+                <h3>Location</h3>
+                <div class="bd-row"><span>Seller location</span><span>${escapeHtml(d.seller_location || '—')}</span></div>
+                <div class="bd-row"><span>Distance from watch</span><span>${d.distance_km != null ? d.distance_km + ' km' : '—'} ${d.watch_radius_km && d.distance_km > d.watch_radius_km ? '<em class="bd-warn">over radius!</em>' : ''}</span></div>
+                <div class="bd-row"><span>Watch radius</span><span>${d.watch_radius_km ? d.watch_radius_km + ' km' : '—'}</span></div>
+                <div class="bd-row"><span>Watch keyword</span><span><em>${escapeHtml(d.keyword || '—')}</em></span></div>
+            </div>`;
+
+        // Section: Status / notification path
+        const sc = d.secondary_check;
+        const statusSec = `
+            <div class="bd-section">
+                <h3>Pipeline status</h3>
+                <div class="bd-row"><span>Rejected</span><span>${d.rejected ? '<em class="bd-warn">YES — ' + escapeHtml(d.rejection_reason || '') + '</em>' : 'no'}</span></div>
+                <div class="bd-row"><span>Emailed</span><span>${d.notified ? '✓ yes' : 'no'}</span></div>
+                ${sc ? `<div class="bd-row"><span>LLM secondary check</span><span><strong>${sc.verdict}</strong> — ${escapeHtml(sc.concern || '')} <em class="muted">(${sc.confidence ?? '?'} conf, ${sc.elapsed_ms ?? '?'}ms)</em></span></div>` : ''}
+                <div class="bd-row"><span>Appraisal note</span><span><em>${escapeHtml(d.appraisal_note || '—')}</em></span></div>
+                ${d.listing_url ? `<div class="bd-row"><a href="${d.listing_url}" target="_blank" rel="noopener">→ open listing on Marketplace</a></div>` : ''}
+            </div>`;
+
+        return scoreSec + compSec + adjSec + distSec + statusSec;
     }
 
     async function refreshAppraisalFeed() {
@@ -583,21 +709,34 @@
             wrap.innerHTML = listings.map((l) => {
                 const ts = l.appraised_at || l.scraped_at;
                 const ago = timeAgo(ts);
-                // Comp summary — count, median, source badge. The
-                // source badge is a clickable chip that opens a side
-                // panel with the actual comp listings (so the user can
-                // see exactly what data drove the score).
+                // Comp summary chip — ALWAYS clickable when there's a
+                // search term, so any appraised listing can be audited.
+                // Falls back to a non-clickable label if we have a
+                // sample size but no term, and is omitted entirely
+                // when no comp data exists.
                 const compSrc = l.comp_source || null;
-                const compChip = (compSrc && l.comp_search_term)
-                    ? `<button class="apr-comp-chip apr-src-${compSrc}" type="button"
+                const sourceLabel = compSrc === 'ebay' ? 'eBay'
+                                  : compSrc === 'marketplace' ? 'FB Mkt'
+                                  : 'comps';
+                let compChip = '';
+                if (l.comp_search_term) {
+                    compChip = `<button class="apr-comp-chip ${compSrc ? 'apr-src-' + compSrc : ''}" type="button"
                               data-comp-term="${escapeHtml(l.comp_search_term)}"
-                              data-comp-source="${compSrc}"
-                              title="Click to see the ${l.comp_sample_size ?? '?'} comp listings used for this score">${
-                        compSrc === 'ebay' ? 'eBay' : 'FB Mkt'
-                      } · n=${l.comp_sample_size ?? '?'} · med $${l.comp_median != null ? Math.round(l.comp_median) : '?'}</button>`
-                    : (l.comp_sample_size
-                        ? `<span class="apr-comp-chip">n=${l.comp_sample_size} · med $${l.comp_median != null ? Math.round(l.comp_median) : '?'}</span>`
-                        : '');
+                              data-comp-source="${compSrc || 'marketplace'}"
+                              title="Click to see the comp listings driving this score">${sourceLabel} · n=${l.comp_sample_size ?? '?'} · med $${l.comp_median != null ? Math.round(l.comp_median) : '?'}</button>`;
+                } else if (l.comp_sample_size) {
+                    compChip = `<span class="apr-comp-chip">n=${l.comp_sample_size} · med $${l.comp_median != null ? Math.round(l.comp_median) : '?'}</span>`;
+                }
+
+                // Score breakdown chip — clickable, opens a drawer
+                // showing the full computation (percentile rank, comp
+                // stats, condition signals, fair value) so user can
+                // see EXACTLY why a score is what it is.
+                const breakdownChip = (l.deal_score != null && l.appraised)
+                    ? `<button class="apr-bd-chip" type="button"
+                              data-listing-id="${escapeHtml(l.id)}"
+                              title="Click to see how this score was computed">why?</button>`
+                    : '';
 
                 const tail = l.rejected
                     ? `<span class="apr-tail bad">rejected: ${escapeHtml(l.rejection_reason || "n/a")}</span>`
@@ -623,6 +762,7 @@
                                     : (l.seller_location ? `<span class="apr-dist apr-dist-unknown" title="couldn't geocode ‘${escapeHtml(l.seller_location)}’">${escapeHtml(l.seller_location)}</span>` : '')}
                                 <span class="apr-ago">${ago}</span>
                                 ${compChip}
+                                ${breakdownChip}
                                 ${tail}
                             </div>
                         </div>

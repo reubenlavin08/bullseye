@@ -172,36 +172,53 @@ def get_best_comps(
     target_text: str | None = None,
     use_embedding_filter: bool = False,
 ) -> CompStats:
-    """Prefer eBay sold comps; fall back to Marketplace if eBay has
-    nothing useful. The appraisal pipeline can call this directly to
-    get 'whichever source has data' without needing source-specific
-    branching.
+    """Get the best comp data for an FB Marketplace target listing.
 
-    Decision rule:
-      * eBay sample >= MIN_SAMPLE_FOR_PREFERENCE  → use eBay (sold prices)
-      * else                                       → use Marketplace
+    Decision rule (REVISED 2026-05 after observing score skew):
+      * Marketplace sample >= MIN_MARKETPLACE_PRIMARY (default 8)
+        → use Marketplace asking-prices (same-platform, fair comparison)
+      * else (sparse Marketplace data, e.g. niche keyword)
+        → fall back to eBay active listings; the platform mismatch is
+          worth absorbing for a usable signal vs no signal at all
+
+    Why we don't prefer eBay primary even though it has more data:
+      eBay listings are systematically more expensive than Marketplace
+      asking (shipping included, more new items, polished listings,
+      retail-style sellers). Comparing a Marketplace listing's price
+      against an eBay distribution puts it in eBay's bottom percentile
+      → inflated deal_score. e.g. a $10 Marketplace router scored 91
+      because eBay routers median $32; against Marketplace comps ($5-15
+      typical) the same listing would score in the middle of the
+      distribution. Unfair to the user — they'd get bombarded with
+      'great deals' that are just average Marketplace prices.
+
+      Marketplace-vs-Marketplace is the right comparison for an FB
+      Marketplace target. eBay only when Marketplace has nothing.
     """
-    MIN_SAMPLE_FOR_PREFERENCE = 5
+    MIN_MARKETPLACE_PRIMARY = 8
 
-    # Lazy import to avoid circular dep — marketplace.py imports
-    # nothing from this module so the cycle is asymmetric, but keeping
-    # the import lazy is cheap and safe.
+    # Lazy import to avoid circular dep
     from .marketplace import get_comps as get_marketplace_comps
 
-    ebay_stats = get_ebay_comps(
-        search_term=search_term,
-        asking_price=asking_price,
-        target_text=target_text,
-        use_embedding_filter=use_embedding_filter,
-    )
-    if ebay_stats.sample_size >= MIN_SAMPLE_FOR_PREFERENCE:
-        return ebay_stats
-
-    # Fall back to Marketplace asking-prices
-    return get_marketplace_comps(
+    mp_stats = get_marketplace_comps(
         search_term=search_term,
         lat=49.2827, lng=-123.1207, radius_km=1500,
         asking_price=asking_price,
         target_text=target_text,
         use_embedding_filter=use_embedding_filter,
     )
+    if mp_stats.sample_size >= MIN_MARKETPLACE_PRIMARY:
+        return mp_stats
+
+    # Sparse Marketplace data — try eBay as fallback. Better than
+    # 'unscoreable' for niche keywords where Marketplace can't find
+    # enough comps.
+    ebay_stats = get_ebay_comps(
+        search_term=search_term,
+        asking_price=asking_price,
+        target_text=target_text,
+        use_embedding_filter=use_embedding_filter,
+    )
+    if ebay_stats.sample_size >= mp_stats.sample_size:
+        return ebay_stats
+    return mp_stats
