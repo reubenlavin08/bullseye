@@ -37,6 +37,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from . import minimax_client
 from .ollama_client import get_default_client
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,15 @@ SECONDARY_CHECK_MODEL = os.environ.get(
     "OLLAMA_SECONDARY_MODEL",
     os.environ.get("OLLAMA_APPRAISAL_MODEL", "llama3.2:3b-instruct-q4_K_M"),
 )
+
+# Cloud escalation thresholds — when do we promote a Tier-1 (Ollama)
+# verdict to a Tier-2 (MiniMax cloud) check? Designed to use the cloud
+# sparingly:
+#   - score >= LLM_CLOUD_FORCE_SCORE   → ALWAYS escalate (paranoia tier)
+#   - tier-1 verdict 'uncertain'       → escalate (model couldn't decide)
+#   - score >= LLM_CLOUD_LOWCONF_SCORE AND confidence='low' → escalate
+LLM_CLOUD_FORCE_SCORE = int(os.environ.get("LLM_CLOUD_FORCE_SCORE", "95"))
+LLM_CLOUD_LOWCONF_SCORE = int(os.environ.get("LLM_CLOUD_LOWCONF_SCORE", "90"))
 
 
 @dataclass
@@ -64,12 +74,16 @@ class VerifyResult:
     concern: short human-readable reason, or None if legit/skipped.
     confidence: LLM's stated confidence in its own verdict.
     elapsed_s: how long the check took.
+    backend: 'ollama' | 'minimax' | None — which model produced the
+      final verdict; useful for the dashboard to know when MiniMax
+      was consulted vs. when local was sufficient.
     """
     verdict: str
     concern: str | None
     confidence: str | None
     elapsed_s: float
     model: str | None
+    backend: str | None = None
 
 
 def should_verify(*, deal_score: int | None, confidence_label: str | None) -> bool:
@@ -165,25 +179,12 @@ Statistical score: {deal_score}/100 (higher = better deal vs. comps)
 Question: Based on the title and description, is this a legitimate good deal at the listed asking price, or is something obfuscated (rental, financing, parts-only, replica, scam, etc.)? Respond in JSON."""
 
 
-def verify_listing(
-    *,
-    title: str,
-    description: str | None,
-    asking_price: float,
-    comp_median: float | None,
-    comp_sample_size: int | None,
+def _verify_with_ollama(
+    *, title: str, description: str | None, asking_price: float,
+    comp_median: float | None, comp_sample_size: int | None,
     deal_score: int,
-    confidence_label: str | None = None,
 ) -> VerifyResult:
-    """Run the secondary-check LLM and parse the result.
-
-    Returns VerifyResult.verdict='skipped' if LLM is unavailable or
-    secondary check is disabled — caller should treat that as
-    "verification did not happen, use the original score."
-    """
-    if not SECONDARY_CHECK_ENABLED:
-        return VerifyResult("skipped", None, None, 0.0, None)
-
+    """Tier-1 check via local Ollama. Always free; ~2-5s per call."""
     user_prompt = _build_user_prompt(
         title=title or "(no title)",
         description=description or "",
@@ -192,18 +193,17 @@ def verify_listing(
         comp_sample_size=comp_sample_size,
         deal_score=deal_score,
     )
-
     try:
         resp = get_default_client().generate_json(
             model=SECONDARY_CHECK_MODEL,
             system=_SYSTEM_PROMPT,
             user=user_prompt,
-            temperature=0.1,   # we want consistent verdicts, not creativity
+            temperature=0.1,
             num_predict=256,
         )
-    except Exception as e:  # noqa: BLE001 — never let LLM failure block the pipeline
-        logger.warning("secondary-check LLM call failed: %s", e)
-        return VerifyResult("skipped", None, None, 0.0, None)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ollama secondary-check failed: %s", e)
+        return VerifyResult("skipped", None, None, 0.0, None, "ollama")
 
     parsed = resp.parsed or {}
     raw_verdict = str(parsed.get("verdict") or "uncertain").lower()
@@ -224,4 +224,100 @@ def verify_listing(
         confidence=raw_conf,
         elapsed_s=resp.elapsed_s,
         model=resp.model,
+        backend="ollama",
+    )
+
+
+def _should_escalate_to_cloud(
+    *, tier1_verdict: str, deal_score: int, confidence_label: str | None,
+) -> tuple[bool, str]:
+    """Decide whether to spend a MiniMax call confirming Tier-1's
+    verdict. Returns (should_escalate, reason).
+
+    Triggers (any one is enough):
+      1. tier1 returned 'uncertain' — local model couldn't decide
+      2. deal_score >= LLM_CLOUD_FORCE_SCORE — paranoia tier (default 95)
+      3. deal_score >= LLM_CLOUD_LOWCONF_SCORE AND confidence='low' —
+         high score + sparse data is the classic false-positive zone
+    """
+    if not minimax_client.available():
+        return False, "minimax unavailable (no API key)"
+    if minimax_client.daily_budget_remaining() <= 0:
+        return False, "minimax daily budget exhausted"
+    if tier1_verdict == "uncertain":
+        return True, "tier1=uncertain"
+    if deal_score >= LLM_CLOUD_FORCE_SCORE:
+        return True, f"score>={LLM_CLOUD_FORCE_SCORE}"
+    if deal_score >= LLM_CLOUD_LOWCONF_SCORE and confidence_label == "low":
+        return True, f"score>={LLM_CLOUD_LOWCONF_SCORE}+low-conf"
+    return False, "tier1 sufficient"
+
+
+def verify_listing(
+    *,
+    title: str,
+    description: str | None,
+    asking_price: float,
+    comp_median: float | None,
+    comp_sample_size: int | None,
+    deal_score: int,
+    confidence_label: str | None = None,
+) -> VerifyResult:
+    """Run the secondary-check pipeline.
+
+    Tier 1: local Ollama (free, every score≥85)
+    Tier 2: MiniMax cloud — ESCALATED ONLY when:
+              - Tier 1 returned 'uncertain', OR
+              - score >= LLM_CLOUD_FORCE_SCORE (default 95), OR
+              - score >= LLM_CLOUD_LOWCONF_SCORE (90) AND confidence='low'
+            AND MiniMax is configured AND today's daily budget isn't
+            exhausted.
+
+    Returns the FINAL verdict (Tier 2 if it ran, otherwise Tier 1).
+    `backend` field on the result tells you which model spoke last.
+    """
+    if not SECONDARY_CHECK_ENABLED:
+        return VerifyResult("skipped", None, None, 0.0, None, None)
+
+    # --- Tier 1: local Ollama ---
+    tier1 = _verify_with_ollama(
+        title=title, description=description, asking_price=asking_price,
+        comp_median=comp_median, comp_sample_size=comp_sample_size,
+        deal_score=deal_score,
+    )
+
+    # --- Tier 2: cloud escalation? ---
+    should, reason = _should_escalate_to_cloud(
+        tier1_verdict=tier1.verdict, deal_score=deal_score,
+        confidence_label=confidence_label,
+    )
+    if not should:
+        logger.debug("staying with tier1 verdict (%s)", reason)
+        return tier1
+
+    logger.info(
+        "escalating to MiniMax (%s) — tier1=%s score=%d budget_left=%d",
+        reason, tier1.verdict, deal_score,
+        minimax_client.daily_budget_remaining(),
+    )
+    tier2 = minimax_client.verify(
+        title=title, description=description, asking_price=asking_price,
+        comp_median=comp_median, comp_sample_size=comp_sample_size,
+        deal_score=deal_score, confidence_label=confidence_label,
+    )
+    if tier2.verdict == "skipped":
+        # MiniMax bailed (network, budget race, parse error). Fall back
+        # to tier1 — better something than nothing.
+        logger.info("tier2 skipped (%s); falling back to tier1", tier2.concern or "no reason")
+        return tier1
+
+    # Adapt tier2's VerifyResult shape (minimax_client uses its own
+    # dataclass; copy to ours).
+    return VerifyResult(
+        verdict=tier2.verdict,
+        concern=tier2.concern,
+        confidence=tier2.confidence,
+        elapsed_s=tier1.elapsed_s + tier2.elapsed_s,
+        model=tier2.model,
+        backend="minimax",
     )

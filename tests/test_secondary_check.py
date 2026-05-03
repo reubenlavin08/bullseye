@@ -145,14 +145,35 @@ class _FakeResponse:
 
 
 def _patch_llm(parsed):
-    """Helper: patch the Ollama client to return a synthetic response."""
-    from deal_finder.appraisal import secondary_check as sc
+    """Helper: patch the Ollama client to return a synthetic response.
+    Also patches MiniMax to be unavailable so tests stay deterministic
+    (no escalation unless the test explicitly opts in)."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
 
     fake = _FakeResponse(parsed)
-    return patch.object(
-        sc, "get_default_client",
-        return_value=type("C", (), {"generate_json": lambda self, **kw: fake})(),
-    )
+    return _MultiPatch([
+        patch.object(
+            sc, "get_default_client",
+            return_value=type("C", (), {"generate_json": lambda self, **kw: fake})(),
+        ),
+        patch.object(minimax_client, "available", return_value=False),
+    ])
+
+
+class _MultiPatch:
+    """Context manager that activates multiple patches together."""
+
+    def __init__(self, patches):
+        self._patches = patches
+
+    def __enter__(self):
+        for p in self._patches:
+            p.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        for p in reversed(self._patches):
+            p.__exit__(*exc)
 
 
 def test_verify_legit_verdict():
@@ -265,6 +286,157 @@ def test_verify_concern_truncated():
         )
     assert r.verdict == "suspect"
     assert len(r.concern or "") <= 300
+
+
+# --- Tiered escalation: Ollama → MiniMax ---------------------------------
+
+
+def test_should_escalate_when_tier1_uncertain():
+    """Tier 1 returning 'uncertain' should always escalate (when MiniMax
+    is available + budget remains)."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10):
+        should, reason = sc._should_escalate_to_cloud(
+            tier1_verdict="uncertain", deal_score=85, confidence_label="medium",
+        )
+    assert should
+    assert "uncertain" in reason
+
+
+def test_should_escalate_when_score_at_force_threshold():
+    """Score >= LLM_CLOUD_FORCE_SCORE always escalates regardless of
+    Tier 1's verdict."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10):
+        # Even when tier1 said legit, score>=95 escalates
+        should, _ = sc._should_escalate_to_cloud(
+            tier1_verdict="legit", deal_score=95, confidence_label="high",
+        )
+    assert should
+
+
+def test_should_escalate_low_conf_high_score():
+    """Score >= 90 with low confidence should escalate."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10):
+        should, _ = sc._should_escalate_to_cloud(
+            tier1_verdict="legit", deal_score=92, confidence_label="low",
+        )
+    assert should
+
+
+def test_should_NOT_escalate_when_minimax_unavailable():
+    """No API key → never escalate even if other conditions met."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=False):
+        should, reason = sc._should_escalate_to_cloud(
+            tier1_verdict="uncertain", deal_score=99, confidence_label="low",
+        )
+    assert not should
+    assert "unavailable" in reason
+
+
+def test_should_NOT_escalate_when_budget_exhausted():
+    """Budget=0 → don't escalate even when Tier 1 was uncertain."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=0):
+        should, reason = sc._should_escalate_to_cloud(
+            tier1_verdict="uncertain", deal_score=99, confidence_label="low",
+        )
+    assert not should
+    assert "budget" in reason
+
+
+def test_should_NOT_escalate_when_tier1_legit_and_score_below_threshold():
+    """Tier 1 said legit and score < 95 → cheap path, save the
+    MiniMax call."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    with patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10):
+        should, reason = sc._should_escalate_to_cloud(
+            tier1_verdict="legit", deal_score=87, confidence_label="medium",
+        )
+    assert not should
+    assert "sufficient" in reason
+
+
+def test_verify_listing_uses_tier2_verdict_when_escalated():
+    """End-to-end: Tier 1 says uncertain, MiniMax says suspect → final
+    result is suspect with backend='minimax'."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    fake_ollama_resp = _FakeResponse({
+        "verdict": "uncertain",
+        "concern": "not enough info",
+        "confidence": "low",
+    })
+    fake_ollama_client = type("C", (), {
+        "generate_json": lambda self, **kw: fake_ollama_resp,
+    })()
+
+    fake_tier2 = minimax_client.VerifyResult(
+        verdict="suspect",
+        concern="financing scheme detected",
+        confidence="high",
+        elapsed_s=1.5,
+        model="MiniMax-Test",
+        backend="minimax",
+    )
+
+    with patch.object(sc, "get_default_client", return_value=fake_ollama_client), \
+         patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10), \
+         patch.object(minimax_client, "verify", return_value=fake_tier2):
+        r = sc.verify_listing(
+            title="x", description="y", asking_price=40.0,
+            comp_median=400.0, comp_sample_size=10, deal_score=92,
+            confidence_label="low",
+        )
+    assert r.verdict == "suspect"
+    assert r.concern == "financing scheme detected"
+    assert r.backend == "minimax"
+
+
+def test_verify_listing_falls_back_to_tier1_when_tier2_skipped():
+    """If MiniMax bails (budget race, network), use Tier 1's verdict
+    rather than returning skipped."""
+    from deal_finder.appraisal import minimax_client, secondary_check as sc
+
+    fake_ollama_resp = _FakeResponse({
+        "verdict": "uncertain",
+        "concern": "ambiguous",
+        "confidence": "low",
+    })
+    fake_ollama_client = type("C", (), {
+        "generate_json": lambda self, **kw: fake_ollama_resp,
+    })()
+    fake_tier2_skipped = minimax_client.VerifyResult(
+        verdict="skipped", concern=None, confidence=None,
+        elapsed_s=0.0, model=None, backend="minimax",
+    )
+
+    with patch.object(sc, "get_default_client", return_value=fake_ollama_client), \
+         patch.object(minimax_client, "available", return_value=True), \
+         patch.object(minimax_client, "daily_budget_remaining", return_value=10), \
+         patch.object(minimax_client, "verify", return_value=fake_tier2_skipped):
+        r = sc.verify_listing(
+            title="x", description="", asking_price=40.0,
+            comp_median=400.0, comp_sample_size=10, deal_score=99,
+            confidence_label="low",
+        )
+    # Tier 1 said uncertain → final is uncertain via fallback
+    assert r.verdict == "uncertain"
+    assert r.backend == "ollama"
 
 
 def test_verify_disabled_returns_skipped(monkeypatch):
