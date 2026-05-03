@@ -87,8 +87,18 @@
         const list = document.createElement("ul");
         list.className = "comps-list";
         data.rows.forEach(function (row) {
-            const li = document.createElement("li");
-            li.className = "comp-row";
+            // Each row is a full <a> wrapping all cells so clicking
+            // anywhere on the row opens the comp listing. (Title-only
+            // links were too small a click target.) Falls back to
+            // <li> when listing_url is missing.
+            const useLink = !!row.listing_url;
+            const li = document.createElement(useLink ? "a" : "li");
+            li.className = "comp-row" + (useLink ? " comp-row-link" : "");
+            if (useLink) {
+                li.href = row.listing_url;
+                li.target = "_blank";
+                li.rel = "noopener";
+            }
             const isNearMedian = Math.abs(row.price - median) / median < 0.15;
             if (isNearMedian) li.classList.add("near-median");
 
@@ -100,11 +110,8 @@
             price.className = "comp-price";
             price.textContent = "$" + Math.round(row.price);
 
-            const titleEl = document.createElement("a");
+            const titleEl = document.createElement("span");
             titleEl.className = "comp-title";
-            titleEl.href = row.listing_url || "#";
-            titleEl.target = "_blank";
-            titleEl.rel = "noopener";
             titleEl.textContent = row.title || "(no title)";
 
             const loc = document.createElement("span");

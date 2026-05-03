@@ -1064,22 +1064,32 @@ em, .italic {
 .comp-title {
     grid-column: 2; grid-row: 1;
     z-index: 1;
-    color: var(--accent);                    /* clearly a link, not body text */
-    text-decoration: underline;
-    text-decoration-style: dotted;
-    text-decoration-color: rgba(194, 65, 12, 0.45);
-    text-underline-offset: 3px;
+    color: var(--accent);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Whole-row link: clicking anywhere on the row opens the comp. */
+a.comp-row-link {
+    text-decoration: none;
+    color: inherit;
     cursor: pointer;
+    transition: background 120ms var(--ease);
 }
-.comp-title:hover {
-    color: var(--accent-strong, var(--accent));
-    text-decoration-style: solid;
+a.comp-row-link:hover {
+    background: rgba(194, 65, 12, 0.06);
+}
+a.comp-row-link:hover .comp-title {
+    text-decoration: underline;
+    text-decoration-style: dotted;
     text-decoration-color: currentColor;
+    text-underline-offset: 3px;
 }
-.comp-title:visited { color: var(--accent); }
+a.comp-row-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
 
 .comp-loc { grid-column: 3; grid-row: 1; z-index: 1; font-size: 9px; }
 

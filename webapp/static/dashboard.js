@@ -227,6 +227,28 @@
                 `emails today: ${fmtNum(r.emails_today)}\n` +
                 `total ever sent: ${fmtNum(r.emails_total)}`;
 
+            // External API counters block
+            const ext = data.external_apis || {};
+            const mm = ext.minimax || {};
+            const eb = ext.ebay || {};
+            const setText = (id, v) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = (v == null) ? "—" : fmtNum(v);
+            };
+            setText("mm-calls-today", mm.calls_today);
+            setText("mm-budget", mm.daily_budget);
+            setText("mm-secondary-checks", mm.secondary_checks_today);
+            setText("mm-total", mm.calls_total);
+            setText("ebay-calls-today", eb.calls_today);
+            setText("ebay-total", eb.calls_total);
+            const mmBar = document.getElementById("mm-bar");
+            if (mmBar && mm.daily_budget > 0) {
+                const pct = Math.min(100, (mm.calls_today / mm.daily_budget) * 100);
+                mmBar.style.width = pct.toFixed(1) + "%";
+                // Color scales red as budget is consumed.
+                mmBar.dataset.full = pct >= 80 ? "yes" : "no";
+            }
+
             document.getElementById("stat-errors").textContent = fmtNum(r.pipeline_errors_24h);
             document.getElementById("stat-uptime").textContent =
                 data.scheduler_booted_at ? formatUptime(data.scheduler_booted_at) : "—";
@@ -459,6 +481,7 @@
     // --- 4b: appraisal feed -------------------------------------------
 
     let appraisalFilter = "all";
+    let appraisalMinScore = null;     // null = no min-score gate
 
     function setupAppraisalFilters() {
         const wrap = document.getElementById("appraisal-filters");
@@ -471,6 +494,26 @@
                 appraisalFilter = btn.dataset.filter || "all";
                 refreshAppraisalFeed();
             });
+        });
+
+        // Score-min input — applies an arbitrary numeric filter on top
+        // of (or instead of) the canned status filter. Blank = no min.
+        const input = document.getElementById("score-min-input");
+        const apply = document.getElementById("score-min-apply");
+        const clear = document.getElementById("score-min-clear");
+        const commit = () => {
+            const v = parseInt(input.value, 10);
+            appraisalMinScore = (isNaN(v) || v < 0 || v > 100) ? null : v;
+            refreshAppraisalFeed();
+        };
+        if (apply) apply.addEventListener("click", commit);
+        if (clear) clear.addEventListener("click", () => {
+            input.value = "";
+            appraisalMinScore = null;
+            refreshAppraisalFeed();
+        });
+        if (input) input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); commit(); }
         });
     }
 
@@ -542,20 +585,27 @@
                 `mean $${Math.round(data.mean)} · range $${Math.round(data.min)}–$${Math.round(data.max)}`;
             const max = data.max || 1;
             const median = data.median || 0;
+            // Each row is a full-width clickable link to the actual
+            // comp listing (title field alone was too small a target —
+            // user wanted the entire row to be clickable). Renders as
+            // <a class="comp-drawer-row"> so any click on the price,
+            // title, location, or empty space opens the listing.
             drawer.querySelector(".comp-drawer-body").innerHTML = rows.map((r) => {
                 const pct = (r.price / max) * 100;
                 const nearMed = median && Math.abs(r.price - median) / median < 0.15;
                 const cls = nearMed ? "comp-drawer-row near-median" : "comp-drawer-row";
-                const titleHTML = r.listing_url
-                    ? `<a href="${r.listing_url}" target="_blank" rel="noopener">${escapeHtml(r.title || "(no title)")}</a>`
-                    : escapeHtml(r.title || "(no title)");
+                const href = r.listing_url || "#";
+                const tag = r.listing_url ? "a" : "div";
+                const linkAttrs = r.listing_url
+                    ? `href="${escapeHtml(href)}" target="_blank" rel="noopener"`
+                    : "";
                 return `
-                    <div class="${cls}">
+                    <${tag} class="${cls}" ${linkAttrs}>
                         <div class="comp-drawer-bar" style="width:${pct.toFixed(1)}%"></div>
                         <span class="comp-drawer-price">$${Math.round(r.price)}</span>
-                        <span class="comp-drawer-title-cell">${titleHTML}</span>
+                        <span class="comp-drawer-title-cell">${escapeHtml(r.title || "(no title)")}</span>
                         <span class="comp-drawer-loc">${escapeHtml(r.location || "")}</span>
-                    </div>`;
+                    </${tag}>`;
             }).join("");
         } catch (err) {
             drawer.querySelector(".comp-drawer-meta").textContent = "Failed to load comps: " + err.message;
@@ -696,8 +746,13 @@
     async function refreshAppraisalFeed() {
         try {
             // 200 listings keeps a multi-hour history visible. The feed
-            // itself is scrollable; the API caps at 200 anyway.
-            const url = `/api/dashboard/appraisal-feed?filter=${appraisalFilter}&limit=200`;
+            // itself is scrollable; the API caps at 200 anyway. The
+            // optional min_score query param overrides the canned
+            // status filter when set.
+            let url = `/api/dashboard/appraisal-feed?filter=${appraisalFilter}&limit=200`;
+            if (appraisalMinScore != null) {
+                url += `&min_score=${appraisalMinScore}`;
+            }
             const data = await (await fetch(url)).json();
             const wrap = document.getElementById("appraisal-feed");
             const listings = data.listings || [];

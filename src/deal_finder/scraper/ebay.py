@@ -117,6 +117,22 @@ class _RateGate:
 _DEFAULT_INTERVAL_S = 1.0
 
 
+def _record_ebay_api_call(*, operation: str, status: str, keywords: str | None = None) -> None:
+    """Persist an 'ebay_api' event so the dashboard can show a daily
+    call counter. Best-effort; never raises (an observability bug
+    should never break a real comp fetch)."""
+    try:
+        from ..db.events import record_event
+        record_event(
+            "ebay_api",
+            operation=operation,
+            status=status,
+            keywords=(keywords or "")[:60],
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("could not record ebay_api event: %s", e)
+
+
 # --- Client ---------------------------------------------------------------
 
 @dataclass
@@ -282,6 +298,8 @@ class EbayClient:
             )
         except cffi_exc.RequestException as e:
             logger.warning("eBay browse-api network error: %s", e)
+            _record_ebay_api_call(operation="browse_search", status="network_error",
+                                  keywords=keywords)
             raise
 
         if resp.status_code in (401, 403):
@@ -289,6 +307,9 @@ class EbayClient:
             with self._oauth_lock:
                 self._oauth_token = None
                 self._oauth_expires_at = 0
+            _record_ebay_api_call(operation="browse_search",
+                                  status=f"auth_{resp.status_code}",
+                                  keywords=keywords)
             raise ValueError(
                 f"eBay Browse API auth rejected ({resp.status_code}): "
                 f"{resp.text[:200]}"
@@ -297,7 +318,13 @@ class EbayClient:
             logger.warning(
                 "eBay Browse HTTP %d: %s", resp.status_code, resp.text[:300],
             )
+            _record_ebay_api_call(operation="browse_search",
+                                  status=f"http_{resp.status_code}",
+                                  keywords=keywords)
             resp.raise_for_status()
+
+        _record_ebay_api_call(operation="browse_search", status="ok",
+                              keywords=keywords)
 
         body = resp.json()
         return _parse_browse_items(body)

@@ -76,6 +76,42 @@
             <div class="status-stat"><span class="stat-num" id="stat-last">—</span><small>last event</small></div>
         </section>
 
+        <!-- 1b. External API counters (MiniMax + eBay) -->
+        <section class="dash-block ext-api-block">
+            <div class="dash-block-head">
+                <span class="receipt-stamp">external apis · today</span>
+                <span class="muted dash-block-sub">budget burn for paid + quota'd services</span>
+            </div>
+            <div class="ext-api-grid">
+                <div class="ext-api-card" id="ext-minimax">
+                    <div class="ext-api-name">MiniMax</div>
+                    <div class="ext-api-stat">
+                        <span class="ext-api-num" id="mm-calls-today">—</span>
+                        <span class="ext-api-of">/ <span id="mm-budget">—</span></span>
+                    </div>
+                    <div class="ext-api-label">cloud LLM calls today</div>
+                    <div class="ext-api-bar-wrap">
+                        <div class="ext-api-bar" id="mm-bar"></div>
+                    </div>
+                    <div class="ext-api-meta muted">
+                        <span id="mm-secondary-checks">—</span> secondary checks today ·
+                        <span id="mm-total">—</span> total ever
+                    </div>
+                </div>
+                <div class="ext-api-card" id="ext-ebay">
+                    <div class="ext-api-name">eBay Browse</div>
+                    <div class="ext-api-stat">
+                        <span class="ext-api-num" id="ebay-calls-today">—</span>
+                    </div>
+                    <div class="ext-api-label">comp fetches today</div>
+                    <div class="ext-api-meta muted">
+                        <span id="ebay-total">—</span> total ever ·
+                        <span class="muted">free tier 5000/day cap</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- 2. Pipeline funnel -->
         <section class="dash-block">
             <div class="dash-block-head">
@@ -126,11 +162,18 @@
                 <span class="receipt-stamp">appraisal feed · 4s refresh</span>
                 <div class="dash-tabs" id="appraisal-filters">
                     <button class="dash-tab is-active" data-filter="all">All</button>
-                    <button class="dash-tab" data-filter="passed">≥ Threshold</button>
                     <button class="dash-tab" data-filter="scored">Scored</button>
                     <button class="dash-tab" data-filter="unscoreable">Unscoreable</button>
                     <button class="dash-tab" data-filter="rejected">Rejected</button>
                 </div>
+            </div>
+            <div class="appraisal-toolbar">
+                <label for="score-min-input" class="muted">min score</label>
+                <input type="number" id="score-min-input" min="0" max="100" placeholder="any"
+                       title="Show only listings with deal_score ≥ this. Leave blank for no minimum.">
+                <button type="button" class="btn-tiny" id="score-min-apply">apply</button>
+                <button type="button" class="btn-tiny" id="score-min-clear">clear</button>
+                <span class="muted score-min-hint">(filters above the buttons; e.g. 90 = email-worthy only)</span>
             </div>
             <div class="muted dash-block-sub" style="margin-bottom:10px;">
                 Newest first. Color-coded by pipeline outcome. Click a row to open the FB listing.

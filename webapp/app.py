@@ -630,6 +630,37 @@ def api_dashboard_summary():
             )
             active_w, total_w = cur.fetchone()
 
+            # External API counters — useful for tracking daily spend
+            # / quota burn. minimax_call events are recorded by the
+            # MiniMax client (success or failure both count toward
+            # daily budget). ebay_api events would count Browse calls
+            # — we don't currently emit them but compute the count
+            # graceful-zero so the field stays stable.
+            cur.execute(
+                """SELECT
+                       COUNT(*) FILTER (WHERE event_type='minimax_call'
+                            AND created_at >= NOW()::date) AS minimax_today,
+                       COUNT(*) FILTER (WHERE event_type='minimax_call'
+                            AND created_at >= NOW()::date
+                            AND (detail->>'success')::bool = TRUE) AS minimax_today_ok,
+                       COUNT(*) FILTER (WHERE event_type='minimax_call') AS minimax_total,
+                       COUNT(*) FILTER (WHERE event_type='secondary_check'
+                            AND created_at >= NOW()::date) AS sec_check_today,
+                       COUNT(*) FILTER (WHERE event_type='ebay_api'
+                            AND created_at >= NOW()::date) AS ebay_today,
+                       COUNT(*) FILTER (WHERE event_type='ebay_api') AS ebay_total
+                   FROM scheduler_events""",
+            )
+            (mm_today, mm_today_ok, mm_total,
+             sc_today, ebay_today, ebay_total) = cur.fetchone()
+
+    # Pull MiniMax budget cap from the env so the UI can show
+    # 'X/Y used today' without hardcoding the number.
+    try:
+        mm_budget = int(os.environ.get("MINIMAX_DAILY_BUDGET", "20"))
+    except (TypeError, ValueError):
+        mm_budget = 20
+
     poll_timer = _compute_poll_timer()
 
     return jsonify({
@@ -651,6 +682,19 @@ def api_dashboard_summary():
         },
         "scheduler_booted_at": last_boot.isoformat() if last_boot else None,
         "poll_timer": poll_timer,
+        "external_apis": {
+            "minimax": {
+                "calls_today": int(mm_today or 0),
+                "calls_today_succeeded": int(mm_today_ok or 0),
+                "calls_total": int(mm_total or 0),
+                "daily_budget": mm_budget,
+                "secondary_checks_today": int(sc_today or 0),
+            },
+            "ebay": {
+                "calls_today": int(ebay_today or 0),
+                "calls_total": int(ebay_total or 0),
+            },
+        },
         "funnel_today": {
             "scraped": scraped,
             "rejected": rej,
@@ -822,11 +866,27 @@ def api_dashboard_appraisal_feed():
     limit = max(1, min(limit, 200))
     filt = (request.args.get("filter") or "all").lower()
     since_id = request.args.get("since_id") or None
+    # Score-min filter: explicit numeric threshold from the UI. Lets
+    # the user dial in 75/80/85/90 etc. without depending on a fixed
+    # 'threshold' env value that may not match their watch threshold.
+    try:
+        min_score_raw = request.args.get("min_score")
+        min_score = int(min_score_raw) if min_score_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        min_score = None
+    if min_score is not None:
+        min_score = max(0, min(100, min_score))
 
     where_clauses = []
     params: list = []
 
-    if filt == "passed":
+    if min_score is not None:
+        where_clauses.append(
+            "l.appraised = TRUE AND l.rejected = FALSE "
+            "AND l.deal_score >= %s"
+        )
+        params.append(min_score)
+    elif filt == "passed":
         where_clauses.append(
             "l.appraised = TRUE AND l.rejected = FALSE "
             "AND l.deal_score >= %s"

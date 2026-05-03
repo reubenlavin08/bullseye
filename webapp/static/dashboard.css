@@ -232,6 +232,74 @@
     color: var(--fg-muted);
 }
 
+/* ---------- 1b. External API counters ---------- */
+
+.ext-api-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+}
+.ext-api-card {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    background: rgba(255, 252, 244, 0.55);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ext-api-name {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+.ext-api-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    line-height: 1;
+}
+.ext-api-num {
+    font-family: var(--font-slab);
+    font-size: 32px;
+    color: var(--fg);
+}
+.ext-api-of {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--fg-muted);
+}
+.ext-api-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+}
+.ext-api-bar-wrap {
+    height: 4px;
+    background: rgba(63, 23, 24, 0.08);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+.ext-api-bar {
+    height: 100%;
+    width: 0;
+    background: var(--good);
+    transition: width 600ms var(--ease), background 200ms var(--ease);
+}
+.ext-api-bar[data-full="yes"] { background: var(--bad); }
+.ext-api-meta {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    margin-top: 4px;
+}
+
 /* ---------- 2. Funnel ------------- */
 
 .funnel {
@@ -380,6 +448,46 @@
 }
 .log-line.log-warn  { color: var(--warn); }
 .log-line.log-error { color: var(--bad); }
+
+/* Score-min toolbar — small input + apply/clear buttons */
+.appraisal-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(63, 23, 24, 0.03);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    flex-wrap: wrap;
+}
+.appraisal-toolbar label {
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 700;
+}
+.appraisal-toolbar input[type="number"] {
+    width: 70px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    background: var(--bg);
+    font: inherit;
+    font-size: 11px;
+    color: var(--fg);
+}
+.appraisal-toolbar input[type="number"]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.score-min-hint {
+    font-size: 9px;
+    margin-left: auto;
+    letter-spacing: 0.04em;
+}
 
 /* ---------- 4b. Appraisal feed ---------- */
 
@@ -639,6 +747,21 @@ button.apr-comp-chip { font: inherit; font-size: 9px; }
     border-bottom: 1px dashed rgba(63, 23, 24, 0.10);
     font-family: var(--font-mono);
     font-size: 10px;
+    /* Whole row is now an <a> — make it look + behave like one. */
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    transition: background 120ms var(--ease);
+}
+a.comp-drawer-row:hover {
+    background: rgba(194, 65, 12, 0.06);
+}
+a.comp-drawer-row:hover .comp-drawer-title-cell {
+    color: var(--accent);
+}
+a.comp-drawer-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
 }
 .comp-drawer-bar {
     position: absolute;
