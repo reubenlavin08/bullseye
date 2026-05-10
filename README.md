@@ -1,3 +1,9 @@
+> **Superseded — kept for reference.** This was the v2 prototype (local Postgres + Ollama). It evolved into the shipped Windows app: **[bullseye-app](https://github.com/reubenlavin08/bullseye-app)** → [getbullseye.app](https://getbullseye.app).
+>
+> Predecessor: [salvage-radar](https://github.com/reubenlavin08/salvage-radar) (Craigslist, v1).
+
+---
+
 # bullseye
 
 Save a list of what you want on Facebook Marketplace. The system polls
